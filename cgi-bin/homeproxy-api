@@ -1,0 +1,742 @@
+#!/bin/sh
+# HomeProxy Simple UI - CGI API Backend
+# Lightweight shell CGI for managing homeproxy via UCI commands.
+# Designed for OpenWRT routers with uhttpd.
+
+CONFIG="homeproxy"
+SUB="subscription"
+SCRIPTS_DIR="/etc/homeproxy/scripts"
+CONFIG_FILE="/etc/config/homeproxy"
+CUSTOM_RULES_LIST="/etc/homeproxy/resources/custom_rules.list"
+CUSTOM_RULES_JSON="/etc/homeproxy/resources/custom_rules.json"
+URLTEST_URL="https://cp.cloudflare.com"
+POOL_RN="hp_pool"
+POOL_RR="hp_pool_rule"
+
+# ── JSON helpers ──────────────────────────────────────────────
+
+json_esc() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g;s/"/\\"/g;s/	/\\t/g' | tr '\n' ' '
+}
+
+json_str() {
+    printf '"%s"' "$(json_esc "$1")"
+}
+
+json_ok() {
+    printf '{"ok":true,"data":%s}' "${1:-null}"
+}
+
+json_err() {
+    printf '{"ok":false,"error":"%s"}' "$(json_esc "$1")"
+}
+
+# ── Input parsing ─────────────────────────────────────────────
+
+read_input() {
+    if [ "$REQUEST_METHOD" = "POST" ]; then
+        if [ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+            POST_DATA=$(dd bs=1 count="$CONTENT_LENGTH" 2>/dev/null)
+        fi
+    fi
+
+    case "$REQUEST_METHOD" in
+        GET)
+            ACTION=$(echo "$QUERY_STRING" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+            ;;
+        POST)
+            ACTION=$(echo "$POST_DATA" | jsonfilter -e '$.action' 2>/dev/null)
+            ;;
+    esac
+}
+
+get_param() {
+    echo "$POST_DATA" | jsonfilter -e "\$.${1}" 2>/dev/null
+}
+
+get_query() {
+    echo "$QUERY_STRING" | sed -n "s/.*${1}=\([^&]*\).*/\1/p"
+}
+
+# ── UCI helpers ───────────────────────────────────────────────
+
+sections_of_type() {
+    uci -q show "$CONFIG" 2>/dev/null | grep "=${1}\$" | cut -d. -f2 | cut -d= -f1
+}
+
+get_sub_urls() {
+    grep "list subscription_url" "$CONFIG_FILE" 2>/dev/null | \
+        sed "s/^[[:space:]]*list subscription_url '//;s/'$//"
+}
+
+url_hash() {
+    local clean=$(echo "$1" | sed 's/#.*$//')
+    echo -n "$clean" | md5sum | cut -d' ' -f1
+}
+
+url_name() {
+    local name=$(echo "$1" | sed -n 's/.*#\(.*\)/\1/p')
+    if [ -z "$name" ]; then
+        name=$(echo "$1" | sed 's|.*://||;s|/.*||')
+    fi
+    printf '%b' "$(echo "$name" | sed 's/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g')"
+}
+
+is_sub_disabled() {
+    local hash="$1"
+    for h in $(uci -q get "$CONFIG.$SUB.disabled_sub" 2>/dev/null); do
+        [ "$h" = "$hash" ] && return 0
+    done
+    return 1
+}
+
+is_node_disabled() {
+    local id="$1"
+    for n in $(uci -q get "$CONFIG.$SUB.disabled_node" 2>/dev/null); do
+        [ "$n" = "$id" ] && return 0
+    done
+    return 1
+}
+
+rebuild_pool() {
+    uci -q delete "$CONFIG.$POOL_RN" 2>/dev/null
+    uci -q delete "$CONFIG.$POOL_RR" 2>/dev/null
+
+    local nodes=""
+    for section in $(sections_of_type node); do
+        local gh=$(uci -q get "$CONFIG.$section.grouphash" 2>/dev/null)
+        if [ -n "$gh" ]; then
+            is_sub_disabled "$gh" && continue
+        else
+            is_node_disabled "$section" && continue
+        fi
+        nodes="$nodes $section"
+    done
+
+    nodes=$(echo "$nodes" | xargs)
+    [ -z "$nodes" ] && return
+
+    uci -q set "$CONFIG.$POOL_RN=routing_node"
+    uci -q set "$CONFIG.$POOL_RN.label=VPN Pool"
+    uci -q set "$CONFIG.$POOL_RN.enabled=1"
+    uci -q set "$CONFIG.$POOL_RN.node=urltest"
+    uci -q set "$CONFIG.$POOL_RN.urltest_test_url=$URLTEST_URL"
+    for n in $nodes; do
+        uci -q add_list "$CONFIG.$POOL_RN.urltest_nodes=$n"
+    done
+
+    uci -q set "$CONFIG.$POOL_RR=routing_rule"
+    uci -q set "$CONFIG.$POOL_RR.label=VPN Pool Route"
+    uci -q set "$CONFIG.$POOL_RR.enabled=1"
+    uci -q set "$CONFIG.$POOL_RR.action=route"
+    uci -q set "$CONFIG.$POOL_RR.outbound=$POOL_RN"
+
+    for rs in $(sections_of_type ruleset); do
+        local rs_enabled=$(uci -q get "$CONFIG.$rs.enabled" 2>/dev/null)
+        [ "$rs_enabled" = "0" ] && continue
+        uci -q add_list "$CONFIG.$POOL_RR.rule_set=$rs"
+    done
+}
+
+cleanup_legacy_routing() {
+    for rn in $(sections_of_type routing_node); do
+        [ "$rn" = "$POOL_RN" ] && continue
+        local node_type=$(uci -q get "$CONFIG.$rn.node" 2>/dev/null)
+        [ "$node_type" = "urltest" ] || continue
+        for rr in $(sections_of_type routing_rule); do
+            local ob=$(uci -q get "$CONFIG.$rr.outbound" 2>/dev/null)
+            [ "$ob" = "$rn" ] && uci -q delete "$CONFIG.$rr"
+        done
+        uci -q delete "$CONFIG.$rn"
+    done
+}
+
+restart_hp() {
+    /etc/init.d/homeproxy restart >/dev/null 2>&1
+}
+
+# ── Subscriptions ─────────────────────────────────────────────
+
+action_get_subscriptions() {
+    local first=1
+    printf '['
+
+    get_sub_urls | while IFS= read -r url; do
+        [ -z "$url" ] && continue
+        [ "$first" = "1" ] || printf ','
+        first=0
+
+        local hash=$(url_hash "$url")
+        local name=$(url_name "$url")
+
+        local count=0
+        for section in $(sections_of_type node); do
+            local gh=$(uci -q get "$CONFIG.$section.grouphash" 2>/dev/null)
+            [ "$gh" = "$hash" ] && count=$((count + 1))
+        done
+
+        local enabled="true"
+        is_sub_disabled "$hash" && enabled="false"
+
+        printf '{"url":%s,"name":%s,"hash":%s,"nodes":%d,"enabled":%s}' \
+            "$(json_str "$url")" \
+            "$(json_str "$name")" \
+            "$(json_str "$hash")" \
+            "$count" \
+            "$enabled"
+    done
+
+    printf ']'
+}
+
+action_add_subscription() {
+    local url=$(get_param url)
+    local name=$(get_param name)
+
+    [ -z "$url" ] && { json_err "URL is required"; return; }
+
+    case "$url" in
+        http://*|https://*) ;;
+        *) json_err "Invalid URL"; return ;;
+    esac
+
+    local full_url="$url"
+    [ -n "$name" ] && full_url="${url}#${name}"
+
+    uci add_list "$CONFIG.$SUB.subscription_url=$full_url" || {
+        json_err "Failed to add subscription"; return
+    }
+
+    uci commit "$CONFIG"
+    json_ok
+}
+
+action_delete_subscription() {
+    local url=$(get_param url)
+    [ -z "$url" ] && { json_err "URL is required"; return; }
+
+    local hash=$(url_hash "$url")
+
+    uci del_list "$CONFIG.$SUB.subscription_url=$url" 2>/dev/null
+    uci -q del_list "$CONFIG.$SUB.disabled_sub=$hash" 2>/dev/null
+
+    for section in $(sections_of_type node); do
+        local gh=$(uci -q get "$CONFIG.$section.grouphash" 2>/dev/null)
+        [ "$gh" = "$hash" ] && uci -q delete "$CONFIG.$section"
+    done
+
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+action_refresh_subscriptions() {
+    local script="$SCRIPTS_DIR/update_subscriptions.uc"
+
+    if [ -x "$script" ]; then
+        "$script" >/dev/null 2>&1
+    elif [ -f "$script" ]; then
+        ucode "$script" >/dev/null 2>&1
+    else
+        json_err "Update script not found at $script"
+        return
+    fi
+
+    cleanup_legacy_routing
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+action_toggle_subscription() {
+    local url=$(get_param url)
+    local enabled=$(get_param enabled)
+    [ -z "$url" ] && { json_err "URL is required"; return; }
+
+    local hash=$(url_hash "$url")
+
+    if [ "$enabled" = "1" ] || [ "$enabled" = "true" ]; then
+        uci -q del_list "$CONFIG.$SUB.disabled_sub=$hash" 2>/dev/null
+    else
+        uci -q del_list "$CONFIG.$SUB.disabled_sub=$hash" 2>/dev/null
+        uci -q add_list "$CONFIG.$SUB.disabled_sub=$hash"
+    fi
+
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+# ── Nodes ─────────────────────────────────────────────────────
+
+action_get_subscription_nodes() {
+    local ghash=$(get_query hash)
+    ghash=$(echo "$ghash" | tr -cd 'a-f0-9')
+
+    local first=1
+    printf '['
+
+    for section in $(sections_of_type node); do
+        local gh=$(uci -q get "$CONFIG.$section.grouphash" 2>/dev/null)
+        [ "$gh" = "$ghash" ] || continue
+
+        [ "$first" = "1" ] || printf ','
+        first=0
+
+        local label=$(uci -q get "$CONFIG.$section.label" 2>/dev/null)
+        local ntype=$(uci -q get "$CONFIG.$section.type" 2>/dev/null)
+        local addr=$(uci -q get "$CONFIG.$section.address" 2>/dev/null)
+        local port=$(uci -q get "$CONFIG.$section.port" 2>/dev/null)
+
+        printf '{"id":%s,"label":%s,"type":%s,"address":%s,"port":%s}' \
+            "$(json_str "$section")" \
+            "$(json_str "$label")" \
+            "$(json_str "$ntype")" \
+            "$(json_str "$addr")" \
+            "$(json_str "$port")"
+    done
+
+    printf ']'
+}
+
+action_get_manual_nodes() {
+    local first=1
+    printf '['
+
+    for section in $(sections_of_type node); do
+        local gh=$(uci -q get "$CONFIG.$section.grouphash" 2>/dev/null)
+        [ -n "$gh" ] && continue
+
+        [ "$first" = "1" ] || printf ','
+        first=0
+
+        local label=$(uci -q get "$CONFIG.$section.label" 2>/dev/null)
+        local ntype=$(uci -q get "$CONFIG.$section.type" 2>/dev/null)
+        local addr=$(uci -q get "$CONFIG.$section.address" 2>/dev/null)
+        local port=$(uci -q get "$CONFIG.$section.port" 2>/dev/null)
+        local enabled="true"
+        is_node_disabled "$section" && enabled="false"
+
+        printf '{"id":%s,"label":%s,"type":%s,"address":%s,"port":%s,"enabled":%s}' \
+            "$(json_str "$section")" \
+            "$(json_str "$label")" \
+            "$(json_str "$ntype")" \
+            "$(json_str "$addr")" \
+            "$(json_str "$port")" \
+            "$enabled"
+    done
+
+    printf ']'
+}
+
+action_add_node() {
+    local label=$(get_param label)
+    local ntype=$(get_param type)
+    local addr=$(get_param address)
+    local port=$(get_param port)
+
+    [ -z "$label" ] || [ -z "$ntype" ] || [ -z "$addr" ] || [ -z "$port" ] && {
+        json_err "Name, type, address and port are required"; return
+    }
+
+    local section_id
+    section_id=$(echo -n "$label" | md5sum | cut -d' ' -f1)
+
+    uci -q set "$CONFIG.$section_id=node"
+    uci -q set "$CONFIG.$section_id.label=$label"
+    uci -q set "$CONFIG.$section_id.type=$ntype"
+    uci -q set "$CONFIG.$section_id.address=$addr"
+    uci -q set "$CONFIG.$section_id.port=$port"
+
+    case "$ntype" in
+        shadowsocks)
+            local method=$(get_param shadowsocks_encrypt_method)
+            local pw=$(get_param password)
+            [ -n "$method" ] && uci -q set "$CONFIG.$section_id.shadowsocks_encrypt_method=$method"
+            [ -n "$pw" ] && uci -q set "$CONFIG.$section_id.password=$pw"
+            ;;
+        vless)
+            local uuid=$(get_param uuid)
+            local flow=$(get_param vless_flow)
+            [ -n "$uuid" ] && uci -q set "$CONFIG.$section_id.uuid=$uuid"
+            [ -n "$flow" ] && [ "$flow" != "none" ] && uci -q set "$CONFIG.$section_id.vless_flow=$flow"
+            ;;
+        vmess)
+            local uuid=$(get_param uuid)
+            local encrypt=$(get_param vmess_encrypt)
+            [ -n "$uuid" ] && uci -q set "$CONFIG.$section_id.uuid=$uuid"
+            [ -n "$encrypt" ] && uci -q set "$CONFIG.$section_id.vmess_encrypt=$encrypt"
+            uci -q set "$CONFIG.$section_id.vmess_global_padding=1"
+            ;;
+        trojan)
+            local pw=$(get_param password)
+            [ -n "$pw" ] && uci -q set "$CONFIG.$section_id.password=$pw"
+            ;;
+        hysteria2)
+            local pw=$(get_param password)
+            local obfs_pw=$(get_param hysteria_obfs_password)
+            [ -n "$pw" ] && uci -q set "$CONFIG.$section_id.password=$pw"
+            uci -q set "$CONFIG.$section_id.tls=1"
+            if [ -n "$obfs_pw" ]; then
+                uci -q set "$CONFIG.$section_id.hysteria_obfs_type=salamander"
+                uci -q set "$CONFIG.$section_id.hysteria_obfs_password=$obfs_pw"
+            fi
+            ;;
+        wireguard)
+            local priv_key=$(get_param private_key)
+            local pub_key=$(get_param peer_public_key)
+            local psk=$(get_param pre_shared_key)
+            local addr4=$(get_param local_address_ipv4)
+            local addr6=$(get_param local_address_ipv6)
+            local mtu=$(get_param mtu)
+            local wg_dns=$(get_param dns)
+            local allowed=$(get_param allowed_ips)
+            local reserved=$(get_param reserved)
+
+            [ -n "$priv_key" ] && uci -q set "$CONFIG.$section_id.wireguard_private_key=$priv_key"
+            [ -n "$pub_key" ] && uci -q set "$CONFIG.$section_id.wireguard_peer_public_key=$pub_key"
+            [ -n "$psk" ] && uci -q set "$CONFIG.$section_id.wireguard_pre_shared_key=$psk"
+            [ -n "$addr4" ] && uci -q add_list "$CONFIG.$section_id.wireguard_local_address=$addr4"
+            [ -n "$addr6" ] && uci -q add_list "$CONFIG.$section_id.wireguard_local_address=$addr6"
+            [ -n "$mtu" ] && uci -q set "$CONFIG.$section_id.wireguard_mtu=$mtu"
+            if [ -n "$wg_dns" ]; then
+                IFS=',' ; for d in $wg_dns; do
+                    d=$(echo "$d" | xargs)
+                    [ -n "$d" ] && uci -q add_list "$CONFIG.$section_id.dns=$d"
+                done ; unset IFS
+            fi
+            if [ -n "$allowed" ]; then
+                IFS=',' ; for a in $allowed; do
+                    a=$(echo "$a" | xargs)
+                    [ -n "$a" ] && uci -q add_list "$CONFIG.$section_id.allowed_ips=$a"
+                done ; unset IFS
+            fi
+            if [ -n "$reserved" ]; then
+                IFS=',' ; for r in $reserved; do
+                    r=$(echo "$r" | xargs)
+                    [ -n "$r" ] && uci -q add_list "$CONFIG.$section_id.wireguard_reserved=$r"
+                done ; unset IFS
+            fi
+            ;;
+    esac
+
+    # TLS (shared by vless, vmess, trojan, hysteria2)
+    case "$ntype" in
+        vless|vmess|trojan)
+            local tls=$(get_param tls)
+            local sni=$(get_param tls_sni)
+            [ -n "$tls" ] && uci -q set "$CONFIG.$section_id.tls=$tls"
+            [ -n "$sni" ] && uci -q set "$CONFIG.$section_id.tls_sni=$sni"
+            ;;
+        hysteria2)
+            local sni=$(get_param tls_sni)
+            [ -n "$sni" ] && uci -q set "$CONFIG.$section_id.tls_sni=$sni"
+            ;;
+    esac
+
+    # Transport (shared by vless, vmess, trojan)
+    case "$ntype" in
+        vless|vmess|trojan)
+            local tp=$(get_param transport)
+            if [ -n "$tp" ] && [ "$tp" != "none" ]; then
+                uci -q set "$CONFIG.$section_id.transport=$tp"
+                case "$tp" in
+                    ws)
+                        local wsh=$(get_param ws_host)
+                        local wsp=$(get_param ws_path)
+                        [ -n "$wsh" ] && uci -q set "$CONFIG.$section_id.ws_host=$wsh"
+                        [ -n "$wsp" ] && uci -q set "$CONFIG.$section_id.ws_path=$wsp"
+                        ;;
+                    grpc)
+                        local gsn=$(get_param grpc_servicename)
+                        [ -n "$gsn" ] && uci -q set "$CONFIG.$section_id.grpc_servicename=$gsn"
+                        ;;
+                    http)
+                        local hh=$(get_param http_host)
+                        local hp=$(get_param http_path)
+                        [ -n "$hh" ] && uci -q set "$CONFIG.$section_id.http_host=$hh"
+                        [ -n "$hp" ] && uci -q set "$CONFIG.$section_id.http_path=$hp"
+                        ;;
+                    httpupgrade)
+                        local huh=$(get_param httpupgrade_host)
+                        local hup=$(get_param http_path)
+                        [ -n "$huh" ] && uci -q set "$CONFIG.$section_id.httpupgrade_host=$huh"
+                        [ -n "$hup" ] && uci -q set "$CONFIG.$section_id.http_path=$hup"
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok "{\"id\":$(json_str "$section_id")}"
+}
+
+action_delete_node() {
+    local id=$(get_param id)
+    [ -z "$id" ] && { json_err "ID is required"; return; }
+    id=$(echo "$id" | tr -cd 'a-zA-Z0-9_')
+
+    uci -q delete "$CONFIG.$id"
+    uci -q del_list "$CONFIG.$SUB.disabled_node=$id" 2>/dev/null
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+action_toggle_node() {
+    local id=$(get_param id)
+    local enabled=$(get_param enabled)
+    [ -z "$id" ] && { json_err "ID is required"; return; }
+    id=$(echo "$id" | tr -cd 'a-zA-Z0-9_')
+
+    if [ "$enabled" = "1" ] || [ "$enabled" = "true" ]; then
+        uci -q del_list "$CONFIG.$SUB.disabled_node=$id" 2>/dev/null
+    else
+        uci -q del_list "$CONFIG.$SUB.disabled_node=$id" 2>/dev/null
+        uci -q add_list "$CONFIG.$SUB.disabled_node=$id"
+    fi
+
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+# ── Rule Sets ─────────────────────────────────────────────────
+
+action_get_rulesets() {
+    local first=1
+    printf '['
+
+    for section in $(sections_of_type ruleset); do
+        [ "$section" = "custom_rules" ] && continue
+        [ "$first" = "1" ] || printf ','
+        first=0
+
+        local label=$(uci -q get "$CONFIG.$section.label" 2>/dev/null)
+        local enabled=$(uci -q get "$CONFIG.$section.enabled" 2>/dev/null)
+        local rtype=$(uci -q get "$CONFIG.$section.type" 2>/dev/null)
+        local fmt=$(uci -q get "$CONFIG.$section.format" 2>/dev/null)
+        local url=$(uci -q get "$CONFIG.$section.url" 2>/dev/null)
+
+        printf '{"id":%s,"label":%s,"enabled":%s,"type":%s,"format":%s,"url":%s}' \
+            "$(json_str "$section")" \
+            "$(json_str "$label")" \
+            "$(json_str "${enabled:-1}")" \
+            "$(json_str "${rtype:-remote}")" \
+            "$(json_str "${fmt:-binary}")" \
+            "$(json_str "$url")"
+    done
+
+    printf ']'
+}
+
+action_add_ruleset() {
+    local label=$(get_param label)
+    local url=$(get_param url)
+
+    [ -z "$label" ] || [ -z "$url" ] && { json_err "Label and URL are required"; return; }
+
+    case "$url" in
+        http://*|https://*) ;;
+        *) json_err "Invalid URL"; return ;;
+    esac
+
+    local section
+    section=$(uci add "$CONFIG" ruleset)
+    uci -q set "$CONFIG.$section.label=$label"
+    uci -q set "$CONFIG.$section.enabled=1"
+    uci -q set "$CONFIG.$section.type=remote"
+    uci -q set "$CONFIG.$section.format=binary"
+    uci -q set "$CONFIG.$section.url=$url"
+    uci -q set "$CONFIG.$section.update_interval=1d"
+
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok "{\"id\":$(json_str "$section")}"
+}
+
+action_delete_ruleset() {
+    local id=$(get_param id)
+    [ -z "$id" ] && { json_err "ID is required"; return; }
+
+    id=$(echo "$id" | tr -cd 'a-zA-Z0-9_')
+
+    uci -q delete "$CONFIG.$id" 2>/dev/null
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+# ── Custom Rules ─────────────────────────────────────────────
+
+rebuild_custom_rules_json() {
+    local domains="" cidrs="" fd=1 fc=1
+
+    if [ -f "$CUSTOM_RULES_LIST" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in
+                domain:*)
+                    [ "$fd" = "1" ] || domains="$domains,"
+                    fd=0
+                    domains="$domains$(json_str "${line#domain:}")"
+                    ;;
+                ip_cidr:*)
+                    [ "$fc" = "1" ] || cidrs="$cidrs,"
+                    fc=0
+                    cidrs="$cidrs$(json_str "${line#ip_cidr:}")"
+                    ;;
+            esac
+        done < "$CUSTOM_RULES_LIST"
+    fi
+
+    local rules=""
+    [ -n "$domains" ] && rules="{\"domain_suffix\":[$domains]}"
+    if [ -n "$cidrs" ]; then
+        [ -n "$rules" ] && rules="$rules,"
+        rules="${rules}{\"ip_cidr\":[$cidrs]}"
+    fi
+
+    mkdir -p "$(dirname "$CUSTOM_RULES_JSON")"
+    printf '{"version":2,"rules":[%s]}' "$rules" > "$CUSTOM_RULES_JSON"
+}
+
+ensure_custom_ruleset() {
+    if ! uci -q get "$CONFIG.custom_rules" >/dev/null 2>&1; then
+        uci -q set "$CONFIG.custom_rules=ruleset"
+        uci -q set "$CONFIG.custom_rules.label=Custom Rules"
+        uci -q set "$CONFIG.custom_rules.enabled=1"
+        uci -q set "$CONFIG.custom_rules.type=local"
+        uci -q set "$CONFIG.custom_rules.format=source"
+        uci -q set "$CONFIG.custom_rules.path=$CUSTOM_RULES_JSON"
+        rebuild_pool
+        uci commit "$CONFIG"
+    fi
+}
+
+action_get_custom_rules() {
+    local first=1
+    printf '['
+
+    if [ -f "$CUSTOM_RULES_LIST" ]; then
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            [ "$first" = "1" ] || printf ','
+            first=0
+
+            local rtype="${line%%:*}"
+            local rvalue="${line#*:}"
+            printf '{"type":%s,"value":%s}' "$(json_str "$rtype")" "$(json_str "$rvalue")"
+        done < "$CUSTOM_RULES_LIST"
+    fi
+
+    printf ']'
+}
+
+action_add_custom_rule() {
+    local rtype=$(get_param type)
+    local rvalue=$(get_param value)
+
+    [ -z "$rtype" ] || [ -z "$rvalue" ] && { json_err "Type and value are required"; return; }
+
+    case "$rtype" in
+        domain|ip_cidr) ;;
+        *) json_err "Invalid type"; return ;;
+    esac
+
+    mkdir -p "$(dirname "$CUSTOM_RULES_LIST")"
+    echo "${rtype}:${rvalue}" >> "$CUSTOM_RULES_LIST"
+
+    ensure_custom_ruleset
+    rebuild_custom_rules_json
+    restart_hp
+    json_ok
+}
+
+action_delete_custom_rule() {
+    local rtype=$(get_param type)
+    local rvalue=$(get_param value)
+
+    [ -z "$rtype" ] || [ -z "$rvalue" ] && { json_err "Type and value are required"; return; }
+
+    if [ -f "$CUSTOM_RULES_LIST" ]; then
+        local entry="${rtype}:${rvalue}"
+        local tmp="${CUSTOM_RULES_LIST}.tmp"
+        grep -vxF "$entry" "$CUSTOM_RULES_LIST" > "$tmp" 2>/dev/null
+        mv "$tmp" "$CUSTOM_RULES_LIST"
+    fi
+
+    rebuild_custom_rules_json
+    restart_hp
+    json_ok
+}
+
+# ── Service ───────────────────────────────────────────────────
+
+action_restart() {
+    restart_hp
+    json_ok
+}
+
+action_get_status() {
+    local running="false"
+    if /etc/init.d/homeproxy status >/dev/null 2>&1; then
+        running="true"
+    fi
+
+    local mode=$(uci -q get "$CONFIG.config.routing_mode" 2>/dev/null)
+
+    local prog=$(sed -n 's/^PROG="\(.*\)"/\1/p' /etc/init.d/homeproxy 2>/dev/null)
+    local engine="" version=""
+    if [ -n "$prog" ] && [ -x "$prog" ]; then
+        engine=$(basename "$prog")
+        version=$("$prog" version 2>/dev/null | head -1 | sed 's/^[^ ]* version //' | cut -d' ' -f1)
+    fi
+
+    printf '{"running":%s,"routing_mode":%s,"engine":%s,"version":%s}' \
+        "$running" "$(json_str "${mode:-unknown}")" \
+        "$(json_str "$engine")" "$(json_str "$version")"
+}
+
+# ── Main ──────────────────────────────────────────────────────
+
+echo "Content-Type: application/json"
+echo ""
+
+if [ "$REQUEST_METHOD" = "OPTIONS" ]; then
+    exit 0
+fi
+
+read_input
+
+case "$ACTION" in
+    get_subscriptions)      json_ok "$(action_get_subscriptions)" ;;
+    add_subscription)       action_add_subscription ;;
+    delete_subscription)    action_delete_subscription ;;
+    refresh_subscriptions)  action_refresh_subscriptions ;;
+    toggle_subscription)    action_toggle_subscription ;;
+    get_subscription_nodes) json_ok "$(action_get_subscription_nodes)" ;;
+    get_manual_nodes)       json_ok "$(action_get_manual_nodes)" ;;
+    add_node)               action_add_node ;;
+    delete_node)            action_delete_node ;;
+    toggle_node)            action_toggle_node ;;
+    get_rulesets)           json_ok "$(action_get_rulesets)" ;;
+    add_ruleset)            action_add_ruleset ;;
+    delete_ruleset)         action_delete_ruleset ;;
+    get_custom_rules)       json_ok "$(action_get_custom_rules)" ;;
+    add_custom_rule)        action_add_custom_rule ;;
+    delete_custom_rule)     action_delete_custom_rule ;;
+    restart)                action_restart ;;
+    get_status)             json_ok "$(action_get_status)" ;;
+    *)                      json_err "Unknown action: $ACTION" ;;
+esac

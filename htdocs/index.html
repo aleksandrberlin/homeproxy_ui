@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HomeProxy</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>HomeProxy</h1>
+            <span id="status-badge" class="badge badge-off" data-i18n="status.stopped">stopped</span>
+        </div>
+        <div class="header-right">
+            <button id="btn-theme" class="btn-icon" aria-label="Toggle theme"></button>
+            <div class="lang-switch">
+                <button class="lang-btn active" data-lang="en">EN</button>
+                <button class="lang-btn" data-lang="ru">RU</button>
+            </div>
+            <button id="btn-apply" class="btn btn-secondary" data-i18n="header.restart">Restart</button>
+        </div>
+        <button id="btn-menu" class="btn-icon header-menu-btn" aria-label="Menu">&#9776;</button>
+        <div id="header-dropdown" class="header-dropdown hidden">
+            <div class="header-dropdown-row">
+                <button id="btn-theme-m" class="btn-icon" aria-label="Toggle theme"></button>
+                <div class="lang-switch">
+                    <button class="lang-btn active" data-lang="en">EN</button>
+                    <button class="lang-btn" data-lang="ru">RU</button>
+                </div>
+            </div>
+            <button id="btn-apply-m" class="btn btn-secondary btn-block" data-i18n="header.restart">Restart</button>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-tab="subscriptions" data-i18n="tab.subscriptions">VPNs</button>
+        <button class="tab" data-tab="rulesets" data-i18n="tab.rulesets">Domains</button>
+    </nav>
+
+    <main>
+        <!-- VPNs & Routing -->
+        <section id="tab-subscriptions" class="tab-content active">
+            <div class="section-header">
+                <h2 data-i18n="subs.title">VPNs</h2>
+                <div class="section-actions">
+                    <button id="btn-refresh-subs" class="btn btn-secondary" data-i18n="subs.refresh">Refresh All</button>
+                    <button id="btn-add-sub" class="btn btn-primary" data-i18n="subs.add">+ Add</button>
+                </div>
+            </div>
+            <p class="section-hint" data-i18n="subs.hint">Add your VPN provider links, then "Refresh All" to download servers. Expand to see servers and connect rule sets.</p>
+            <div id="routing-mode-warning" class="warning hidden" data-i18n="warning.routingMode">
+                Routing mode is not set to "custom". Rule routing only works in custom mode.
+            </div>
+            <div id="subscriptions-list" class="card-list"></div>
+
+            <div class="section-divider"></div>
+            <div class="section-header">
+                <h2 data-i18n="nodes.title">Custom Servers</h2>
+                <div class="section-actions">
+                    <button id="btn-add-node" class="btn btn-primary" data-i18n="nodes.add">+ Add Server</button>
+                </div>
+            </div>
+            <p class="section-hint" data-i18n="nodes.hint">Manually add VPN servers (WireGuard, etc.) and connect rule sets to them.</p>
+            <div id="manual-nodes-list" class="card-list"></div>
+        </section>
+
+        <!-- Domains -->
+        <section id="tab-rulesets" class="tab-content">
+            <div class="section-header">
+                <h2 data-i18n="custom.title">Custom Rules</h2>
+                <div class="section-actions">
+                    <button id="btn-add-custom-rule" class="btn btn-primary" data-i18n="custom.add">+ Add</button>
+                </div>
+            </div>
+            <p class="section-hint" data-i18n="custom.hint">Add domains or IP ranges that should be routed through VPN.</p>
+            <div id="custom-rules-list" class="card-list"></div>
+
+            <div class="section-divider"></div>
+
+            <div class="section-header">
+                <h2 data-i18n="rulesets.title">Rule Sets</h2>
+                <div class="section-actions">
+                    <button id="btn-add-ruleset" class="btn btn-primary" data-i18n="rulesets.add">+ Add</button>
+                </div>
+            </div>
+            <p class="section-hint" data-i18n-html="rulesets.hint">External rule set files that define which traffic gets routed through VPN. Add links to <code>.srs</code> files.</p>
+            <div id="rulesets-list" class="card-list"></div>
+        </section>
+    </main>
+
+    <!-- Modal overlay -->
+    <div id="modal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 id="modal-title"></h3>
+                <button class="modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div id="modal-body"></div>
+            <div class="modal-footer">
+                <button id="modal-cancel" class="btn btn-secondary" data-i18n="modal.cancel">Cancel</button>
+                <button id="modal-ok" class="btn btn-primary" data-i18n="modal.save">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toasts"></div>
+    <script src="langs.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
