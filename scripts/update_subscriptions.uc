@@ -270,6 +270,7 @@ function parse_uri(uri) {
 				password: urldecode(url.username),
 				transport: (params.type !== 'tcp') ? params.type : null,
 				tls: '1',
+				tls_insecure: (params.allowInsecure in ['1', 'true']) ? '1' : '0',
 				tls_sni: params.sni
 			};
 			switch(params.type) {
@@ -310,6 +311,7 @@ function parse_uri(uri) {
 				tuic_congestion_control: params.congestion_control,
 				tuic_udp_relay_mode: params.udp_relay_mode,
 				tls: '1',
+				tls_insecure: (params.allowInsecure in ['1', 'true']) ? '1' : '0',
 				tls_sni: params.sni,
 				tls_alpn: params.alpn ? split(urldecode(params.alpn), ',') : null,
 			};
@@ -340,6 +342,7 @@ function parse_uri(uri) {
 				uuid: url.username,
 				transport: (params.type !== 'tcp') ? params.type : null,
 				tls: (params.security in ['tls', 'xtls', 'reality']) ? '1' : '0',
+				tls_insecure: (params.allowInsecure in ['1', 'true']) ? '1' : '0',
 				tls_sni: params.sni,
 				tls_alpn: params.alpn ? split(urldecode(params.alpn), ',') : null,
 				tls_reality: (params.security === 'reality') ? '1' : '0',
@@ -423,6 +426,7 @@ function parse_uri(uri) {
 				vmess_global_padding: '1',
 				transport: (uri.net !== 'tcp') ? uri.net : null,
 				tls: (uri.tls === 'tls') ? '1' : '0',
+				tls_insecure: (uri.allowInsecure in [true, 'true', '1', 1]) ? '1' : '0',
 				tls_sni: uri.sni || uri.host,
 				tls_alpn: uri.alpn ? split(uri.alpn, ',') : null,
 				tls_utls: sing_features.with_utls ? uri.fp : null

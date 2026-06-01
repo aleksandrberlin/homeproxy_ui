@@ -9,7 +9,7 @@ SCRIPTS_DIR="/etc/homeproxy/scripts"
 CONFIG_FILE="/etc/config/homeproxy"
 CUSTOM_RULES_LIST="/etc/homeproxy/resources/custom_rules.list"
 CUSTOM_RULES_JSON="/etc/homeproxy/resources/custom_rules.json"
-URLTEST_URL="https://cp.cloudflare.com"
+URLTEST_URL_DEFAULT="https://cp.cloudflare.com"
 POOL_RN="hp_pool"
 POOL_RR="hp_pool_rule"
 
@@ -120,7 +120,8 @@ rebuild_pool() {
     uci -q set "$CONFIG.$POOL_RN.label=VPN Pool"
     uci -q set "$CONFIG.$POOL_RN.enabled=1"
     uci -q set "$CONFIG.$POOL_RN.node=urltest"
-    uci -q set "$CONFIG.$POOL_RN.urltest_test_url=$URLTEST_URL"
+    local urltest_url=$(uci -q get "$CONFIG.config.urltest_url" 2>/dev/null)
+    uci -q set "$CONFIG.$POOL_RN.urltest_url=${urltest_url:-$URLTEST_URL_DEFAULT}"
     for n in $nodes; do
         uci -q add_list "$CONFIG.$POOL_RN.urltest_nodes=$n"
     done
@@ -688,6 +689,37 @@ action_restart() {
     json_ok
 }
 
+action_get_proxy_status() {
+    local raw
+    raw=$(curl -s --max-time 2 http://127.0.0.1:9090/proxies 2>/dev/null) || {
+        printf '{}'; return
+    }
+    [ -z "$raw" ] && { printf '{}'; return; }
+    printf '%s' "$raw"
+}
+
+action_get_connections() {
+    local raw
+    raw=$(curl -s --max-time 2 http://127.0.0.1:9090/connections 2>/dev/null) || {
+        printf '{"connections":[]}'; return
+    }
+    [ -z "$raw" ] && { printf '{"connections":[]}'; return; }
+    printf '%s' "$raw"
+}
+
+action_test_delay() {
+    local node_id=$(get_param node_id)
+    [ -z "$node_id" ] && { json_err "node_id required"; return; }
+    node_id=$(echo "$node_id" | tr -cd 'a-f0-9_')
+    local proxy_name="cfg-${node_id}-out"
+    local raw
+    raw=$(curl -s --max-time 8 "http://127.0.0.1:9090/proxies/${proxy_name}/delay?url=https://cp.cloudflare.com&timeout=5000" 2>/dev/null) || {
+        json_err "test failed"; return
+    }
+    [ -z "$raw" ] && { json_err "no response"; return; }
+    printf '%s' "$raw"
+}
+
 action_get_status() {
     local running="false"
     if /etc/init.d/homeproxy status >/dev/null 2>&1; then
@@ -706,6 +738,34 @@ action_get_status() {
     printf '{"running":%s,"routing_mode":%s,"engine":%s,"version":%s}' \
         "$running" "$(json_str "${mode:-unknown}")" \
         "$(json_str "$engine")" "$(json_str "$version")"
+}
+
+# ── Settings ──────────────────────────────────────────────
+
+action_get_settings() {
+    local ai=$(uci -q get "$CONFIG.$SUB.allow_insecure" 2>/dev/null || echo 0)
+    local ut=$(uci -q get "$CONFIG.config.urltest_url" 2>/dev/null)
+    printf '{"allow_insecure":%s,"urltest_url":%s}' \
+        "$(json_str "$ai")" \
+        "$(json_str "${ut:-$URLTEST_URL_DEFAULT}")"
+}
+
+action_set_allow_insecure() {
+    local val=$(get_param value)
+    case "$val" in 0|1) ;; *) val="0" ;; esac
+    uci -q set "$CONFIG.$SUB.allow_insecure=$val"
+    uci commit "$CONFIG"
+    json_ok
+}
+
+action_set_urltest_url() {
+    local val=$(get_param value)
+    [ -z "$val" ] && val="$URLTEST_URL_DEFAULT"
+    uci -q set "$CONFIG.config.urltest_url=$val"
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
 }
 
 # ── Main ──────────────────────────────────────────────────────
@@ -738,5 +798,11 @@ case "$ACTION" in
     delete_custom_rule)     action_delete_custom_rule ;;
     restart)                action_restart ;;
     get_status)             json_ok "$(action_get_status)" ;;
+    get_proxy_status)       json_ok "$(action_get_proxy_status)" ;;
+    get_connections)         json_ok "$(action_get_connections)" ;;
+    test_delay)             action_test_delay ;;
+    get_settings)      json_ok "$(action_get_settings)" ;;
+    set_allow_insecure) action_set_allow_insecure ;;
+    set_urltest_url)   action_set_urltest_url ;;
     *)                      json_err "Unknown action: $ACTION" ;;
 esac

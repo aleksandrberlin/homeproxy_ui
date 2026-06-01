@@ -102,6 +102,11 @@
     var status = {};
     var manualNodesCache = [];
     var customRules = [];
+    var proxyDelays = {};
+    var nodeTraffic = {};
+    var prevConns = {};
+    var prevConnTime = 0;
+    var nodeSpeeds = {};
 
     // ── API ──────────────────────────────────────────────────
 
@@ -129,6 +134,157 @@
         }
         return fetch(API + '?' + qs).then(function (r) { return r.json(); });
     }
+
+    // ── Proxy Status ────────────────────────────────────────
+
+    function fetchProxyStatus() {
+        return Promise.all([
+            apiGet('get_proxy_status'),
+            apiGet('get_connections')
+        ]).then(function (res) {
+            if (res[0].ok && res[0].data && res[0].data.proxies) {
+                var proxies = res[0].data.proxies;
+                var delays = {};
+                Object.keys(proxies).forEach(function (name) {
+                    var m = name.match(/^cfg-(.+)-out$/);
+                    if (!m) return;
+                    var id = m[1];
+                    var h = proxies[name].history;
+                    if (h && h.length) {
+                        delays[id] = h[h.length - 1].delay || 0;
+                    }
+                });
+                proxyDelays = delays;
+            }
+            if (res[1].ok && res[1].data) {
+                var traffic = {};
+                var curr = {};
+                (res[1].data.connections || []).forEach(function (c) {
+                    var chain = c.chains && c.chains[0] || '';
+                    var m = chain.match(/^cfg-(.+)-out$/);
+                    if (!m) return;
+                    var id = m[1];
+                    if (!traffic[id]) traffic[id] = { conns: 0, dl: 0, ul: 0 };
+                    traffic[id].conns++;
+                    traffic[id].dl += c.download || 0;
+                    traffic[id].ul += c.upload || 0;
+                    curr[c.id] = { node: id, dl: c.download || 0, ul: c.upload || 0 };
+                });
+                var now = Date.now();
+                var dt = (now - prevConnTime) / 1000;
+                if (prevConnTime && dt > 0) {
+                    var commonCount = 0;
+                    var deltas = {};
+                    Object.keys(curr).forEach(function (cid) {
+                        if (!prevConns[cid]) return;
+                        commonCount++;
+                        var nid = curr[cid].node;
+                        if (!deltas[nid]) deltas[nid] = { dl: 0, ul: 0 };
+                        deltas[nid].dl += curr[cid].dl - prevConns[cid].dl;
+                        deltas[nid].ul += curr[cid].ul - prevConns[cid].ul;
+                    });
+                    var speeds = {};
+                    Object.keys(traffic).forEach(function (nid) {
+                        var d = deltas[nid] || { dl: 0, ul: 0 };
+                        speeds[nid] = { dl: d.dl / dt, ul: d.ul / dt };
+                    });
+                    nodeSpeeds = speeds;
+                }
+                prevConns = curr;
+                prevConnTime = now;
+                nodeTraffic = traffic;
+            }
+        }).catch(function () {});
+    }
+
+    function formatBytes(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+        if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+        return (b / 1073741824).toFixed(1) + ' GB';
+    }
+
+    function bindTestButtons(container) {
+        container.querySelectorAll('[data-test]').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                testDelayInline(btn.dataset.test, container);
+            });
+        });
+    }
+
+    function testDelayInline(nodeId, container) {
+        var metrics = container.querySelector('.node-metrics');
+        if (!metrics) {
+            metrics = document.createElement('div');
+            metrics.className = 'node-metrics';
+            container.appendChild(metrics);
+        }
+        var first = metrics.querySelector('.metric');
+        var badge;
+        if (first) {
+            badge = first.querySelector('.metric-val');
+        } else {
+            first = document.createElement('span');
+            first.className = 'metric';
+            first.innerHTML = '<span class="metric-val">...</span>';
+            metrics.insertBefore(first, metrics.firstChild);
+            badge = first.querySelector('.metric-val');
+        }
+        badge.textContent = '...';
+        badge.className = 'metric-val node-delay-testing';
+        api('test_delay', { node_id: nodeId }).then(function (res) {
+            if (res.delay !== undefined) {
+                var d = res.delay;
+                proxyDelays[nodeId] = d;
+                if (d === 0) {
+                    badge.textContent = t('status.timeout');
+                    badge.className = 'metric-val node-delay-fail';
+                } else {
+                    badge.textContent = d + 'ms';
+                    badge.className = 'metric-val ' + (d < 200 ? 'node-delay-good' : d < 500 ? 'node-delay-mid' : 'node-delay-bad');
+                }
+            } else {
+                badge.textContent = t('status.timeout');
+                badge.className = 'metric-val node-delay-fail';
+            }
+        }).catch(function () {
+            badge.textContent = '?';
+            badge.className = 'metric-val node-delay-fail';
+        });
+    }
+
+    function formatSpeed(bps) {
+        if (bps < 1024) return bps.toFixed(0) + ' B/s';
+        if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
+        return (bps / 1048576).toFixed(1) + ' MB/s';
+    }
+
+    function metricsHtml(nodeId, enabled) {
+        if (enabled === false) return '';
+        var testBtn = '<button class="btn-test-inline" data-test="' + esc(nodeId) + '">&#8635;</button>';
+        var parts = [];
+        var d = proxyDelays[nodeId];
+        if (d !== undefined) {
+            if (d === 0) {
+                parts.push('<span class="metric"><span class="metric-val node-delay-fail">' + esc(t('status.timeout')) + '</span>' + testBtn + '</span>');
+            } else {
+                var cls = d < 200 ? 'node-delay-good' : d < 500 ? 'node-delay-mid' : 'node-delay-bad';
+                parts.push('<span class="metric"><span class="metric-val ' + cls + '">' + d + 'ms</span>' + testBtn + '</span>');
+            }
+        } else {
+            parts.push('<span class="metric">' + testBtn + '</span>');
+        }
+        var tr = nodeTraffic[nodeId];
+        if (tr) {
+            var sp = nodeSpeeds[nodeId] || { dl: 0, ul: 0 };
+            parts.push('<span class="metric"><span class="metric-icon metric-dl">&#9660;</span><span class="metric-val metric-speed">' + formatSpeed(sp.dl) + '</span></span>');
+            parts.push('<span class="metric"><span class="metric-icon metric-ul">&#9650;</span><span class="metric-val metric-speed">' + formatSpeed(sp.ul) + '</span></span>');
+        }
+        if (!parts.length) return '';
+        return '<div class="node-metrics">' + parts.join('') + '</div>';
+    }
+
 
     // ── Toast ────────────────────────────────────────────────
 
@@ -299,12 +455,52 @@
 
     // ── Subscriptions ────────────────────────────────────────
 
+    var chkInsecure = document.getElementById('chk-allow-insecure');
+    var inpUrltestUrl = document.getElementById('inp-urltest-url');
+    var btnSaveUrltest = document.getElementById('btn-save-urltest');
+
+    chkInsecure.addEventListener('change', function () {
+        var val = this.checked ? '1' : '0';
+        var toggle = this.closest('.toggle');
+        var input = this;
+        toggle.classList.add('loading');
+        input.disabled = true;
+        api('set_allow_insecure', { value: val }).then(function (res) {
+            toggle.classList.remove('loading');
+            input.disabled = false;
+            if (!res.ok) {
+                input.checked = !input.checked;
+                toast(res.error, false);
+            }
+        }).catch(function () {
+            toggle.classList.remove('loading');
+            input.disabled = false;
+            input.checked = !input.checked;
+            toast(t('msg.connFailed'), false);
+        });
+    });
+
+    btnSaveUrltest.addEventListener('click', function () {
+        var val = inpUrltestUrl.value.trim();
+        btnLoading(btnSaveUrltest, true);
+        api('set_urltest_url', { value: val }).then(function (res) {
+            btnLoading(btnSaveUrltest, false);
+            if (res.ok) toast(t('msg.settingsSaved'), true);
+            else toast(res.error, false);
+        }).catch(function () {
+            btnLoading(btnSaveUrltest, false);
+            toast(t('msg.connFailed'), false);
+        });
+    });
+
     function loadAll() {
         Promise.all([
             api('get_subscriptions'),
             api('get_rulesets'),
             api('get_status'),
-            api('get_manual_nodes')
+            api('get_manual_nodes'),
+            apiGet('get_settings'),
+            fetchProxyStatus()
         ]).then(function (res) {
             if (res[0].ok) subscriptions = res[0].data || [];
             if (res[1].ok) rulesets = res[1].data || [];
@@ -321,6 +517,10 @@
             if (res[3].ok) {
                 manualNodesCache = res[3].data || [];
                 renderManualNodes(manualNodesCache);
+            }
+            if (res[4].ok && res[4].data) {
+                chkInsecure.checked = (res[4].data.allow_insecure === '1');
+                inpUrltestUrl.value = res[4].data.urltest_url || '';
             }
             renderSubscriptions();
         }).catch(function (e) { toast(t('msg.error') + e.message, false); });
@@ -359,6 +559,7 @@
 
             var expand = document.createElement('div');
             expand.className = 'card-expand hidden';
+            expand.dataset.hash = sub.hash;
             card.appendChild(expand);
 
             header.querySelector('.card-info').addEventListener('click', function () {
@@ -422,11 +623,16 @@
             container.innerHTML = '';
             res.data.forEach(function (n) {
                 var item = document.createElement('div');
-                item.className = 'node-item';
+                item.className = 'node-card';
+                item.dataset.nodeId = n.id;
                 item.innerHTML =
-                    '<span class="node-type">' + esc(n.type || '?') + '</span>' +
-                    '<span class="node-label">' + esc(n.label || 'Unnamed') + '</span>' +
-                    '<span class="node-addr">' + esc((n.address || '') + ':' + (n.port || '')) + '</span>';
+                    '<div class="node-card-head">' +
+                        '<span class="node-type">' + esc(n.type || '?') + '</span>' +
+                        '<span class="node-label">' + esc(n.label || 'Unnamed') + '</span>' +
+                        '<span class="node-addr">' + esc((n.address || '') + ':' + (n.port || '')) + '</span>' +
+                    '</div>' +
+                    metricsHtml(n.id);
+                bindTestButtons(item);
                 container.appendChild(item);
             });
         });
@@ -475,13 +681,18 @@
             var disabled = n.enabled === false;
             var card = document.createElement('div');
             card.className = 'card' + (disabled ? ' card-disabled' : '');
+            card.dataset.nodeId = n.id;
+            card.dataset.nodeEnabled = disabled ? '0' : '1';
 
+            var addr = (n.address || '') + ':' + (n.port || '');
+            var showAddr = n.label !== addr;
             card.innerHTML =
                 '<div class="card-row">' +
                     '<div class="card-info">' +
                         '<div class="card-title">' + esc(n.label) +
-                            '<span class="node-badge">' + esc(n.type || '') + '</span></div>' +
-                        '<div class="card-meta">' + esc((n.address || '') + ':' + (n.port || '')) + '</div>' +
+                            '<span class="node-badge">' + esc(n.type || '') + '</span>' +
+                            (showAddr ? '<span class="node-addr">' + esc(addr) + '</span>' : '') +
+                            '</div>' +
                     '</div>' +
                     '<div class="card-actions">' +
                         '<label class="toggle"><input type="checkbox" data-toggle-node' +
@@ -489,7 +700,10 @@
                         '><span class="toggle-slider"></span></label>' +
                         '<button class="btn-icon" title="Delete" data-delete>&times;</button>' +
                     '</div>' +
-                '</div>';
+                '</div>' +
+                metricsHtml(n.id, n.enabled);
+
+            bindTestButtons(card);
 
             card.querySelector('[data-toggle-node]').addEventListener('change', function () {
                 var enabled = this.checked;
@@ -978,4 +1192,32 @@
             }
         });
     }, 10000);
+
+    function updateMetricsInPlace() {
+        document.querySelectorAll('[data-node-id]').forEach(function (el) {
+            var nodeId = el.dataset.nodeId;
+            var existing = el.querySelector('.node-metrics');
+            var enabled = el.dataset.nodeEnabled !== '0';
+            var html = metricsHtml(nodeId, enabled);
+            if (!html) {
+                if (existing) existing.remove();
+                return;
+            }
+            if (existing) {
+                existing.innerHTML = html.replace(/^<div[^>]*>/, '').replace(/<\/div>$/, '');
+            } else {
+                var div = document.createElement('div');
+                div.className = 'node-metrics';
+                div.innerHTML = html.replace(/^<div[^>]*>/, '').replace(/<\/div>$/, '');
+                el.appendChild(div);
+            }
+            bindTestButtons(el);
+        });
+    }
+
+    setInterval(function () {
+        fetchProxyStatus().then(function () {
+            updateMetricsInPlace();
+        });
+    }, 3000);
 })();

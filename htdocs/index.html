@@ -36,6 +36,7 @@
     <nav class="tabs">
         <button class="tab active" data-tab="subscriptions" data-i18n="tab.subscriptions">VPNs</button>
         <button class="tab" data-tab="rulesets" data-i18n="tab.rulesets">Domains</button>
+        <button class="tab" data-tab="settings" data-i18n="tab.settings">Settings</button>
     </nav>
 
     <main>
@@ -86,6 +87,26 @@
             </div>
             <p class="section-hint" data-i18n-html="rulesets.hint">External rule set files that define which traffic gets routed through VPN. Add links to <code>.srs</code> files.</p>
             <div id="rulesets-list" class="card-list"></div>
+        </section>
+        <!-- Settings -->
+        <section id="tab-settings" class="tab-content">
+            <div class="section-header">
+                <h2 data-i18n="settings.title">Settings</h2>
+            </div>
+            <p class="section-hint" data-i18n="settings.hint">Global settings for HomeProxy subscriptions and routing.</p>
+            <div class="settings-list">
+                <label class="toggle-row">
+                    <span data-i18n="settings.allowInsecure">Allow Insecure TLS</span>
+                    <label class="toggle"><input type="checkbox" id="chk-allow-insecure"><span class="toggle-slider"></span></label>
+                </label>
+                <div class="setting-row">
+                    <label for="inp-urltest-url" data-i18n="settings.urltestUrl">URL Test</label>
+                    <div class="setting-input-group">
+                        <input type="text" id="inp-urltest-url" placeholder="https://cp.cloudflare.com">
+                        <button id="btn-save-urltest" class="btn btn-primary btn-sm" data-i18n="modal.save">Save</button>
+                    </div>
+                </div>
+            </div>
         </section>
     </main>
 

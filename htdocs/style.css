@@ -345,6 +345,52 @@ main { padding: 16px; max-width: 800px; margin: 0 auto; }
     font-size: 12px;
 }
 
+.settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    cursor: default;
+}
+
+.setting-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+}
+
+.setting-input-group {
+    display: flex;
+    gap: 8px;
+}
+
+.setting-input-group input {
+    flex: 1;
+    min-width: 0;
+}
+
+.btn-sm {
+    padding: 4px 12px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
 /* ── Cards ────────────────────────────────────────────────── */
 
 .card-list { display: flex; flex-direction: column; gap: 8px; }
@@ -355,6 +401,11 @@ main { padding: 16px; max-width: 800px; margin: 0 auto; }
     border-radius: var(--radius);
     padding: 14px 16px;
     box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.card > .node-metrics {
+    margin: 10px -16px -14px;
 }
 
 .card-row {
@@ -407,8 +458,8 @@ main { padding: 16px; max-width: 800px; margin: 0 auto; }
 .expand-icon.open { transform: rotate(90deg); }
 
 .card-expand {
-    padding: 8px 16px 12px;
-    border-top: 1px solid var(--border);
+    padding: 12px 16px 12px;
+    margin-top: 8px;
 }
 
 /* ── Section divider ──────────────────────────────────────── */
@@ -462,6 +513,95 @@ main { padding: 16px; max-width: 800px; margin: 0 auto; }
     font-family: monospace;
     flex-shrink: 0;
 }
+
+/* ── Node cards ──────────────────────────────────────────── */
+
+.node-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    overflow: hidden;
+    background: var(--surface);
+}
+
+.node-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+/* ── Metrics strip ───────────────────────────────────────── */
+
+.node-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 11px;
+    font-family: monospace;
+}
+
+.metric {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 10px;
+    border-right: 1px solid var(--border);
+}
+
+.metric:last-child { border-right: none; }
+
+.metric-label { color: var(--text-dim); }
+
+.metric-icon { font-size: 18px; line-height: 0; display: flex; align-items: center; }
+.metric-dl { color: var(--success); }
+.metric-ul { color: var(--primary); }
+
+.metric-val { font-weight: 600; color: var(--text); }
+
+.metric-speed { color: var(--success); }
+
+.node-delay-good { background: var(--badge-on-bg); color: var(--success); padding: 1px 6px; border-radius: 4px; }
+.node-delay-mid  { background: var(--warning-bg); color: var(--warning-text); padding: 1px 6px; border-radius: 4px; }
+.node-delay-bad  { background: var(--badge-off-bg); color: var(--danger); padding: 1px 6px; border-radius: 4px; }
+.node-delay-fail { background: var(--badge-off-bg); color: var(--danger); padding: 1px 6px; border-radius: 4px; }
+.node-delay-testing { color: var(--text-dim); }
+
+.btn-test {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color .15s, background .15s;
+    margin-left: auto;
+}
+
+.btn-test:hover { background: var(--bg); color: var(--primary); }
+
+.btn-test-inline {
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    transition: color .15s;
+}
+
+.btn-test-inline:hover { color: var(--primary); }
 
 /* ── Card sections ───────────────────────────────────────── */
 

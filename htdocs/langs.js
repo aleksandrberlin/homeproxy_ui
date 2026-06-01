@@ -2,6 +2,7 @@ window.HP_LANGS = {
     en: {
         'status.running': 'running',
         'status.stopped': 'stopped',
+        'status.timeout': 'timeout',
         'header.restart': 'Restart',
         'tab.subscriptions': 'VPNs',
         'tab.rulesets': 'Domains',
@@ -13,6 +14,12 @@ window.HP_LANGS = {
         'subs.empty': 'No VPNs yet. Click "+ Add" to add your VPN provider link.',
         'subs.loading': 'Loading...',
         'subs.noServers': 'No servers. Click "Refresh All" to download.',
+        'tab.settings': 'Settings',
+        'settings.title': 'Settings',
+        'settings.hint': 'Global settings for subscriptions and routing.',
+        'settings.allowInsecure': 'Allow Insecure TLS',
+        'settings.urltestUrl': 'URL Test',
+        'msg.settingsSaved': 'Settings saved',
 
         'warning.routingMode': 'Routing mode is not set to "custom". Rule routing only works in custom mode.',
 
@@ -142,11 +149,14 @@ window.HP_LANGS = {
         'confirm.restart': 'Restart HomeProxy?',
 
         'btn.updating': 'Updating...',
-        'btn.restarting': 'Restarting...'
+        'btn.restarting': 'Restarting...',
+        'btn.testDelay': 'Test delay',
+        'metric.conns': 'conn'
     },
     ru: {
         'status.running': 'работает',
         'status.stopped': 'остановлен',
+        'status.timeout': 'таймаут',
         'header.restart': 'Перезапуск',
         'tab.subscriptions': 'VPN',
         'tab.rulesets': 'Домены',
@@ -158,6 +168,12 @@ window.HP_LANGS = {
         'subs.empty': 'VPN ещё нет. Нажмите «+ Добавить», чтобы добавить ссылку провайдера.',
         'subs.loading': 'Загрузка...',
         'subs.noServers': 'Нет серверов. Нажмите «Обновить все» для загрузки.',
+        'tab.settings': 'Настройки',
+        'settings.title': 'Настройки',
+        'settings.hint': 'Глобальные настройки подписок и маршрутизации.',
+        'settings.allowInsecure': 'Небезопасный TLS',
+        'settings.urltestUrl': 'URL для теста',
+        'msg.settingsSaved': 'Настройки сохранены',
 
         'warning.routingMode': 'Режим маршрутизации не установлен в «custom». Правила работают только в режиме custom.',
 
@@ -287,6 +303,8 @@ window.HP_LANGS = {
         'confirm.restart': 'Перезапустить HomeProxy?',
 
         'btn.updating': 'Обновление...',
-        'btn.restarting': 'Перезапуск...'
+        'btn.restarting': 'Перезапуск...',
+        'btn.testDelay': 'Проверить задержку',
+        'metric.conns': 'соед'
     }
 };

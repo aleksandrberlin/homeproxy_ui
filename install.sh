@@ -33,6 +33,9 @@ chmod 755 "$CGI_DIR/homeproxy-api"
 cp "$SRC/scripts/update_subscriptions.uc" "$SCRIPTS_DIR/"
 chmod 755 "$SCRIPTS_DIR/update_subscriptions.uc"
 
+cp "$SRC/scripts/generate_client.uc" "$SCRIPTS_DIR/"
+chmod 755 "$SCRIPTS_DIR/generate_client.uc"
+
 LAN_IP=$(uci -q get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)
 [ -z "$LAN_IP" ] && LAN_IP="router-ip"
 

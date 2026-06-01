@@ -45,7 +45,20 @@ http://192.168.1.1/homeproxy-ui/
 
 ## Update
 
-Download the latest installer and re-run. No restart needed - just refresh the browser.
+### One-liner from GitHub release
+
+```sh
+ssh root@192.168.1.1 'wget -qO /tmp/hpui-install.sh https://github.com/aleksandrberlin/homeproxy_ui/releases/latest/download/homeproxy-ui-install.sh && sh /tmp/hpui-install.sh'
+```
+
+### Manual update via scp
+
+```sh
+scp -O homeproxy-ui-install.sh root@192.168.1.1:/tmp/
+ssh root@192.168.1.1 'sh /tmp/homeproxy-ui-install.sh'
+```
+
+No restart needed - just refresh the browser.
 
 ## Uninstall
 
