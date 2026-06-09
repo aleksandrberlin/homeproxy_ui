@@ -4,7 +4,7 @@
     // ── i18n ────────────────────────────────────────────────
 
     var langs = window.HP_LANGS || {};
-    var currentLang = localStorage.getItem('hp-lang') || 'en';
+    var currentLang = 'en';
 
     function t(key, params) {
         var s = (langs[currentLang] || langs.en)[key] || key;
@@ -23,6 +23,9 @@
         document.querySelectorAll('[data-i18n-html]').forEach(function (el) {
             el.innerHTML = t(el.dataset.i18nHtml);
         });
+        document.querySelectorAll('[data-i18n-ph]').forEach(function (el) {
+            el.placeholder = t(el.dataset.i18nPh);
+        });
         document.querySelectorAll('.lang-btn').forEach(function (btn) {
             btn.classList.toggle('active', btn.dataset.lang === currentLang);
         });
@@ -30,7 +33,7 @@
 
     function setLang(lang) {
         currentLang = lang;
-        localStorage.setItem('hp-lang', lang);
+        api('set_pref', { key: 'lang', value: lang });
         applyLang();
         renderSubscriptions();
         loadRulesets();
@@ -49,11 +52,11 @@
 
     var themeOrder = ['system', 'light', 'dark'];
     var themeIcons = { system: '◑', light: '☀', dark: '☾' };
-    var currentTheme = localStorage.getItem('hp-theme') || 'system';
+    var currentTheme = 'system';
 
-    function applyTheme(theme) {
+    function applyTheme(theme, save) {
         currentTheme = theme;
-        localStorage.setItem('hp-theme', theme);
+        if (save !== false) api('set_pref', { key: 'theme', value: theme });
         if (theme === 'system') {
             document.documentElement.removeAttribute('data-theme');
         } else {
@@ -74,7 +77,7 @@
     var btnThemeM = document.getElementById('btn-theme-m');
     if (btnThemeM) btnThemeM.addEventListener('click', cycleTheme);
 
-    applyTheme(currentTheme);
+    applyTheme(currentTheme, false);
 
     // ── Mobile menu ────────────────────────────────────────────
 
@@ -135,12 +138,30 @@
         return fetch(API + '?' + qs).then(function (r) { return r.json(); });
     }
 
+    // ── Shared connections fetch (single in-flight request) ──
+
+    var connFetchPromise = null;
+
+    function fetchConnectionsShared() {
+        if (connFetchPromise) return connFetchPromise;
+        connFetchPromise = apiGet('get_connections').then(function (res) {
+            connFetchPromise = null;
+            return res;
+        }).catch(function (e) {
+            connFetchPromise = null;
+            throw e;
+        });
+        return connFetchPromise;
+    }
+
     // ── Proxy Status ────────────────────────────────────────
 
     function fetchProxyStatus() {
+        var activeTab = document.querySelector('.tab.active');
+        var needConns = activeTab && activeTab.dataset.tab === 'subscriptions';
         return Promise.all([
             apiGet('get_proxy_status'),
-            apiGet('get_connections')
+            needConns ? fetchConnectionsShared() : Promise.resolve({ ok: false })
         ]).then(function (res) {
             if (res[0].ok && res[0].data && res[0].data.proxies) {
                 var proxies = res[0].data.proxies;
@@ -449,6 +470,11 @@
             if (tab.dataset.tab === 'rulesets') {
                 loadRulesets();
                 loadCustomRules();
+            }
+            if (tab.dataset.tab === 'connections') {
+                startConnPolling();
+            } else {
+                stopConnPolling();
             }
         });
     });
@@ -1032,6 +1058,16 @@
         body.appendChild(manualBtn);
     });
 
+    // ── Domains search ──────────────────────────────────────────
+
+    var domainsSearch = '';
+
+    document.getElementById('domains-search').addEventListener('input', function () {
+        domainsSearch = this.value.toLowerCase();
+        renderCustomRules();
+        renderRulesets();
+    });
+
     // ── Custom Rules ─────────────────────────────────────────
 
     function loadCustomRules() {
@@ -1044,18 +1080,36 @@
 
     function renderCustomRules() {
         var list = document.getElementById('custom-rules-list');
-        if (!customRules.length) {
-            list.innerHTML = '<div class="empty">' + esc(t('custom.empty')) + '</div>';
+        var filtered = customRules.filter(function (rule) {
+            if (!domainsSearch) return true;
+            return rule.value.toLowerCase().indexOf(domainsSearch) !== -1;
+        });
+        if (!filtered.length) {
+            list.innerHTML = '<div class="empty">' + esc(domainsSearch ? t('search.noResults') : t('custom.empty')) + '</div>';
             return;
         }
         list.innerHTML = '';
-        customRules.forEach(function (rule) {
+        filtered.forEach(function (rule) {
             var item = document.createElement('div');
             item.className = 'node-item';
             item.innerHTML =
                 '<span class="node-type">' + esc(rule.type) + '</span>' +
                 '<span class="node-label">' + esc(rule.value) + '</span>' +
+                '<select class="outbound-select" data-rule-outbound>' + outboundOptions(rule.outbound) + '</select>' +
                 '<button class="btn-icon btn-icon-sm" data-delete-rule>&times;</button>';
+
+            item.querySelector('[data-rule-outbound]').addEventListener('change', function () {
+                var sel = this;
+                sel.disabled = true;
+                api('set_custom_rule_outbound', { type: rule.type, value: rule.value, outbound: sel.value }).then(function (res) {
+                    sel.disabled = false;
+                    if (res.ok) toast(t('msg.outboundChanged'), true);
+                    else toast(res.error, false);
+                }).catch(function () {
+                    sel.disabled = false;
+                    toast(t('msg.connFailed'), false);
+                });
+            });
 
             item.querySelector('[data-delete-rule]').addEventListener('click', function () {
                 if (!confirm(t('confirm.deleteRule', { value: rule.value }))) return;
@@ -1077,10 +1131,15 @@
                 { value: 'domain', text: 'Domain' },
                 { value: 'ip_cidr', text: 'IP CIDR' }
             ]},
-            { name: 'value', label: t('field.ruleValue'), placeholder: t('ph.domain'), required: true }
+            { name: 'value', label: t('field.ruleValue'), placeholder: t('ph.domain'), required: true },
+            { name: 'outbound', label: t('field.outbound'), options: [
+                { value: 'proxy', text: t('outbound.proxy') },
+                { value: 'direct', text: t('outbound.direct') },
+                { value: 'block', text: t('outbound.block') }
+            ]}
         ], function (vals) {
             if (!vals.value) { toast(t('msg.valueRequired'), false); return; }
-            return api('add_custom_rule', { type: vals.type, value: vals.value }).then(function (res) {
+            return api('add_custom_rule', { type: vals.type, value: vals.value, outbound: vals.outbound }).then(function (res) {
                 if (res.ok) { toast(t('msg.ruleAdded'), true); loadCustomRules(); }
                 else { toast(res.error, false); return false; }
             });
@@ -1097,14 +1156,26 @@
         });
     }
 
+    function outboundOptions(selected) {
+        var ob = selected || 'proxy';
+        return '<option value="proxy"' + (ob === 'proxy' ? ' selected' : '') + '>' + esc(t('outbound.proxy')) + '</option>' +
+            '<option value="direct"' + (ob === 'direct' ? ' selected' : '') + '>' + esc(t('outbound.direct')) + '</option>' +
+            '<option value="block"' + (ob === 'block' ? ' selected' : '') + '>' + esc(t('outbound.block')) + '</option>';
+    }
+
     function renderRulesets() {
         var list = document.getElementById('rulesets-list');
-        if (!rulesets.length) {
-            list.innerHTML = '<div class="empty">' + esc(t('rulesets.empty')) + '</div>';
+        var filtered = rulesets.filter(function (rs) {
+            if (!domainsSearch) return true;
+            return (rs.label || '').toLowerCase().indexOf(domainsSearch) !== -1 ||
+                   (rs.url || '').toLowerCase().indexOf(domainsSearch) !== -1;
+        });
+        if (!filtered.length) {
+            list.innerHTML = '<div class="empty">' + esc(domainsSearch ? t('search.noResults') : t('rulesets.empty')) + '</div>';
             return;
         }
         list.innerHTML = '';
-        rulesets.forEach(function (rs) {
+        filtered.forEach(function (rs) {
             var card = document.createElement('div');
             card.className = 'card';
             card.innerHTML =
@@ -1114,9 +1185,22 @@
                         '<div class="card-meta">' + esc(rs.url || '') + '</div>' +
                     '</div>' +
                     '<div class="card-actions">' +
+                        '<select class="outbound-select" data-outbound>' + outboundOptions(rs.outbound) + '</select>' +
                         '<button class="btn-icon" title="Delete" data-delete>&times;</button>' +
                     '</div>' +
                 '</div>';
+            card.querySelector('[data-outbound]').addEventListener('change', function () {
+                var sel = this;
+                sel.disabled = true;
+                api('set_ruleset_outbound', { id: rs.id, outbound: sel.value }).then(function (res) {
+                    sel.disabled = false;
+                    if (res.ok) toast(t('msg.outboundChanged'), true);
+                    else toast(res.error, false);
+                }).catch(function () {
+                    sel.disabled = false;
+                    toast(t('msg.connFailed'), false);
+                });
+            });
             card.querySelector('[data-delete]').addEventListener('click', function () {
                 if (!confirm(t('confirm.deleteRuleset', { name: rs.label || rs.id }))) return;
                 var btn = this;
@@ -1133,10 +1217,15 @@
     document.getElementById('btn-add-ruleset').addEventListener('click', function () {
         modal(t('modal.addRuleset'), [
             { name: 'label', label: t('field.rulesetName'), placeholder: t('ph.rulesetName'), required: true },
-            { name: 'url', label: t('field.rulesetUrl'), placeholder: t('ph.rulesetUrl'), required: true }
+            { name: 'url', label: t('field.rulesetUrl'), placeholder: t('ph.rulesetUrl'), required: true },
+            { name: 'outbound', label: t('field.outbound'), options: [
+                { value: 'proxy', text: t('outbound.proxy') },
+                { value: 'direct', text: t('outbound.direct') },
+                { value: 'block', text: t('outbound.block') }
+            ]}
         ], function (vals) {
             if (!vals.label || !vals.url) { toast(t('msg.nameUrlRequired'), false); return; }
-            return api('add_ruleset', { label: vals.label, url: vals.url }).then(function (res) {
+            return api('add_ruleset', { label: vals.label, url: vals.url, outbound: vals.outbound }).then(function (res) {
                 if (res.ok) { toast(t('msg.rulesetAdded'), true); loadRulesets(); }
                 else { toast(res.error, false); return false; }
             });
@@ -1179,9 +1268,186 @@
     var btnApplyM = document.getElementById('btn-apply-m');
     if (btnApplyM) btnApplyM.addEventListener('click', doRestart);
 
+    // ── Connections ─────────────────────────────────────────────
+
+    var connPaused = false;
+    var connTimer = null;
+    var dhcpLeases = [];
+    var nodeNames = {};
+    var connCount = 20;
+    var connDeviceFilter = '';
+
+    function loadDhcpLeases() {
+        return apiGet('get_dhcp_leases').then(function (res) {
+            if (res.ok) {
+                dhcpLeases = res.data || [];
+                populateDeviceFilter();
+            }
+        }).catch(function () {});
+    }
+
+    function loadNodeNames() {
+        return apiGet('get_node_names').then(function (res) {
+            if (res.ok) nodeNames = res.data || {};
+        }).catch(function () {});
+    }
+
+    function populateDeviceFilter() {
+        var sel = document.getElementById('conn-device-filter');
+        var current = sel.value;
+        sel.innerHTML = '';
+        var all = document.createElement('option');
+        all.value = '';
+        all.textContent = t('conn.allDevices');
+        sel.appendChild(all);
+        dhcpLeases.forEach(function (l) {
+            var opt = document.createElement('option');
+            opt.value = l.ip;
+            opt.textContent = (l.hostname || l.mac) + ' (' + l.ip + ')';
+            sel.appendChild(opt);
+        });
+        sel.value = current;
+    }
+
+    function deviceName(ip) {
+        for (var i = 0; i < dhcpLeases.length; i++) {
+            if (dhcpLeases[i].ip === ip) {
+                return dhcpLeases[i].hostname || dhcpLeases[i].mac;
+            }
+        }
+        return ip;
+    }
+
+    function outboundName(chains) {
+        if (!chains || !chains.length) return '?';
+        var name = chains[0];
+        if (name === 'direct-out') return 'Direct';
+        if (name === 'block-out') return 'Block';
+        if (name === 'dns-out') return 'DNS';
+        var m = name.match(/^cfg-(.+)-out$/);
+        if (m && nodeNames[m[1]]) return nodeNames[m[1]];
+        return name;
+    }
+
+    function connFormatTime(isoStr) {
+        try {
+            var d = new Date(isoStr);
+            var h = ('0' + d.getHours()).slice(-2);
+            var m = ('0' + d.getMinutes()).slice(-2);
+            var s = ('0' + d.getSeconds()).slice(-2);
+            return h + ':' + m + ':' + s;
+        } catch (e) {
+            return '?';
+        }
+    }
+
+    function fetchAndRenderConnections() {
+        if (connPaused) return;
+        fetchConnectionsShared().then(function (res) {
+            if (!res.ok) return;
+            var data = res.data || {};
+            var conns = data.connections || [];
+
+            if (connDeviceFilter) {
+                conns = conns.filter(function (c) {
+                    return c.metadata && c.metadata.sourceIP === connDeviceFilter;
+                });
+            }
+
+            conns.sort(function (a, b) {
+                return new Date(b.start) - new Date(a.start);
+            });
+
+            conns = conns.slice(0, connCount);
+            renderConnections(conns);
+        }).catch(function () {});
+    }
+
+    function renderConnections(conns) {
+        var tbody = document.getElementById('conn-tbody');
+        if (!conns.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="conn-empty">' + esc(t('conn.empty')) + '</td></tr>';
+            return;
+        }
+
+        var html = '';
+        conns.forEach(function (c) {
+            var meta = c.metadata || {};
+            var dest = meta.host || meta.destinationIP || '?';
+            if (meta.destinationPort) dest += ':' + meta.destinationPort;
+            var proto = (meta.network || '?').toUpperCase();
+            var source = deviceName(meta.sourceIP || '?');
+            var outbound = outboundName(c.chains);
+            var rule = c.rule || '';
+            var dl = formatBytes(c.download || 0);
+            var ul = formatBytes(c.upload || 0);
+
+            html += '<tr>' +
+                '<td class="conn-time">' + esc(connFormatTime(c.start)) + '</td>' +
+                '<td><span class="conn-proto conn-proto-' + proto.toLowerCase() + '">' + esc(proto) + '</span></td>' +
+                '<td class="conn-source">' + esc(source) + '</td>' +
+                '<td class="conn-dest">' + esc(dest) + '</td>' +
+                '<td class="conn-outbound">' + esc(outbound) +
+                    (rule ? '<span class="conn-rule">' + esc(rule) + '</span>' : '') +
+                '</td>' +
+                '<td class="conn-traffic">' +
+                    '<span class="conn-dl">↓</span>' + esc(dl) +
+                    ' <span class="conn-ul">↑</span>' + esc(ul) +
+                '</td>' +
+            '</tr>';
+        });
+
+        tbody.innerHTML = html;
+    }
+
+    function startConnPolling() {
+        stopConnPolling();
+        connPaused = false;
+        var pauseBtn = document.getElementById('conn-pause');
+        pauseBtn.textContent = t('conn.pause');
+        loadDhcpLeases();
+        loadNodeNames();
+        fetchAndRenderConnections();
+        connTimer = setInterval(fetchAndRenderConnections, 2000);
+    }
+
+    function stopConnPolling() {
+        if (connTimer) {
+            clearInterval(connTimer);
+            connTimer = null;
+        }
+    }
+
+    document.getElementById('conn-device-filter').addEventListener('change', function () {
+        connDeviceFilter = this.value;
+        fetchAndRenderConnections();
+    });
+
+    document.getElementById('conn-count').addEventListener('change', function () {
+        connCount = parseInt(this.value, 10) || 20;
+        fetchAndRenderConnections();
+    });
+
+    document.getElementById('conn-pause').addEventListener('click', function () {
+        connPaused = !connPaused;
+        this.textContent = t(connPaused ? 'conn.resume' : 'conn.pause');
+    });
+
     // ── Init ─────────────────────────────────────────────────
 
-    applyLang();
+    apiGet('get_prefs').then(function (res) {
+        if (res.ok && res.data) {
+            if (res.data.lang && res.data.lang !== currentLang) {
+                currentLang = res.data.lang;
+            }
+            if (res.data.theme && res.data.theme !== currentTheme) {
+                applyTheme(res.data.theme, false);
+            }
+        }
+        applyLang();
+    }).catch(function () {
+        applyLang();
+    });
     loadAll();
 
     setInterval(function () {
@@ -1216,6 +1482,8 @@
     }
 
     setInterval(function () {
+        var activeTab = document.querySelector('.tab.active');
+        if (!activeTab || activeTab.dataset.tab !== 'subscriptions') return;
         fetchProxyStatus().then(function () {
             updateMetricsInPlace();
         });

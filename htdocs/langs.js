@@ -30,12 +30,12 @@ window.HP_LANGS = {
 
         'custom.title': 'Custom Rules',
         'custom.add': '+ Add',
-        'custom.hint': 'Add domains or IP ranges that should be routed through VPN.',
+        'custom.hint': 'Add domains or IP ranges and choose how to route them: VPN, Direct, or Block.',
         'custom.empty': 'No custom rules yet. Click "+ Add" to add a domain or IP CIDR.',
 
         'rulesets.title': 'Rule Sets',
         'rulesets.add': '+ Add',
-        'rulesets.hint': 'External rule set files that define which traffic gets routed through VPN. Add links to <code>.srs</code> files.',
+        'rulesets.hint': 'External rule set files. Choose outbound per list: VPN, Direct, or Block. Add links to <code>.srs</code> files.',
         'rulesets.empty': 'No rule sets. Click "+ Add" to add a rule set URL.',
 
         'chip.refreshHint': 'Refresh VPN to enable routing',
@@ -84,6 +84,7 @@ window.HP_LANGS = {
         'field.rulesetUrl': 'Rule Set URL (.srs)',
         'field.ruleType': 'Type',
         'field.ruleValue': 'Value',
+        'field.outbound': 'Outbound',
 
         'ph.name': 'My VPN',
         'ph.url': 'https://provider.com/subscribe/...',
@@ -119,6 +120,12 @@ window.HP_LANGS = {
         'ph.domain': 'example.com',
         'ph.ipCidr': '10.0.0.0/8',
 
+        'search.placeholder': 'Search...',
+        'search.noResults': 'No matches found.',
+        'outbound.proxy': 'VPN',
+        'outbound.direct': 'Direct',
+        'outbound.block': 'Block',
+        'msg.outboundChanged': 'Outbound updated',
         'msg.invalidUri': 'Could not parse this URL',
         'msg.pasteUri': 'Paste a server URL or use manual entry',
         'msg.disconnected': 'Disconnected',
@@ -151,7 +158,20 @@ window.HP_LANGS = {
         'btn.updating': 'Updating...',
         'btn.restarting': 'Restarting...',
         'btn.testDelay': 'Test delay',
-        'metric.conns': 'conn'
+        'metric.conns': 'conn',
+
+        'tab.connections': 'Connections',
+        'conn.title': 'Connections',
+        'conn.hint': 'Live connections through sing-box. Shows destination, routing outbound, and traffic.',
+        'conn.allDevices': 'All Devices',
+        'conn.pause': 'Pause',
+        'conn.resume': 'Resume',
+        'conn.empty': 'No active connections.',
+        'conn.colTime': 'Time',
+        'conn.colProto': 'Proto',
+        'conn.colSource': 'Source',
+        'conn.colDest': 'Destination',
+        'conn.colOutbound': 'Outbound'
     },
     ru: {
         'status.running': 'работает',
@@ -184,12 +204,12 @@ window.HP_LANGS = {
 
         'custom.title': 'Свои правила',
         'custom.add': '+ Добавить',
-        'custom.hint': 'Добавьте домены или IP-диапазоны, которые должны идти через VPN.',
+        'custom.hint': 'Добавьте домены или IP-диапазоны и выберите маршрут: VPN, Напрямую или Блок.',
         'custom.empty': 'Своих правил пока нет. Нажмите «+ Добавить», чтобы добавить домен или IP CIDR.',
 
         'rulesets.title': 'Наборы правил',
         'rulesets.add': '+ Добавить',
-        'rulesets.hint': 'Внешние файлы правил, определяющие какой трафик идёт через VPN. Добавьте ссылки на файлы <code>.srs</code>.',
+        'rulesets.hint': 'Внешние файлы правил. Выберите маршрут для каждого списка: VPN, Напрямую или Блок. Добавьте ссылки на файлы <code>.srs</code>.',
         'rulesets.empty': 'Наборов правил нет. Нажмите «+ Добавить», чтобы добавить URL.',
 
         'chip.refreshHint': 'Обновите VPN для настройки маршрутизации',
@@ -238,6 +258,7 @@ window.HP_LANGS = {
         'field.rulesetUrl': 'URL набора правил (.srs)',
         'field.ruleType': 'Тип',
         'field.ruleValue': 'Значение',
+        'field.outbound': 'Маршрут',
 
         'ph.name': 'Мой VPN',
         'ph.url': 'https://provider.com/subscribe/...',
@@ -273,6 +294,12 @@ window.HP_LANGS = {
         'ph.domain': 'example.com',
         'ph.ipCidr': '10.0.0.0/8',
 
+        'search.placeholder': 'Поиск...',
+        'search.noResults': 'Ничего не найдено.',
+        'outbound.proxy': 'VPN',
+        'outbound.direct': 'Напрямую',
+        'outbound.block': 'Блок',
+        'msg.outboundChanged': 'Маршрут обновлён',
         'msg.invalidUri': 'Не удалось разобрать ссылку',
         'msg.pasteUri': 'Вставьте ссылку или заполните вручную',
         'msg.disconnected': 'Отключено',
@@ -305,6 +332,19 @@ window.HP_LANGS = {
         'btn.updating': 'Обновление...',
         'btn.restarting': 'Перезапуск...',
         'btn.testDelay': 'Проверить задержку',
-        'metric.conns': 'соед'
+        'metric.conns': 'соед',
+
+        'tab.connections': 'Соединения',
+        'conn.title': 'Соединения',
+        'conn.hint': 'Активные соединения через sing-box. Показывает адрес назначения, маршрут и трафик.',
+        'conn.allDevices': 'Все устройства',
+        'conn.pause': 'Пауза',
+        'conn.resume': 'Продолжить',
+        'conn.empty': 'Нет активных соединений.',
+        'conn.colTime': 'Время',
+        'conn.colProto': 'Прото',
+        'conn.colSource': 'Источник',
+        'conn.colDest': 'Назначение',
+        'conn.colOutbound': 'Маршрут'
     }
 };

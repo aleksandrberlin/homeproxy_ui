@@ -36,7 +36,7 @@ The CGI backend (`cgi-bin/homeproxy-api`) dispatches on an `action` parameter:
 - POST requests: JSON body with `{"action": "<name>", ...params}`
 - Response: `{"ok": true, "data": ...}` or `{"ok": false, "error": "..."}`
 
-Actions: `get_subscriptions`, `add_subscription`, `delete_subscription`, `refresh_subscriptions`, `toggle_subscription`, `get_subscription_nodes`, `get_manual_nodes`, `add_node`, `delete_node`, `get_rulesets`, `add_ruleset`, `delete_ruleset`, `get_custom_rules`, `add_custom_rule`, `delete_custom_rule`, `restart`, `get_status`
+Actions: `get_subscriptions`, `add_subscription`, `delete_subscription`, `refresh_subscriptions`, `toggle_subscription`, `get_subscription_nodes`, `get_manual_nodes`, `add_node`, `delete_node`, `get_rulesets`, `add_ruleset`, `set_ruleset_outbound`, `delete_ruleset`, `get_custom_rules`, `add_custom_rule`, `delete_custom_rule`, `restart`, `get_status`
 
 ## Development notes
 

@@ -37,6 +37,7 @@
         <button class="tab active" data-tab="subscriptions" data-i18n="tab.subscriptions">VPNs</button>
         <button class="tab" data-tab="rulesets" data-i18n="tab.rulesets">Domains</button>
         <button class="tab" data-tab="settings" data-i18n="tab.settings">Settings</button>
+        <button class="tab" data-tab="connections" data-i18n="tab.connections">Connections</button>
     </nav>
 
     <main>
@@ -68,13 +69,16 @@
 
         <!-- Domains -->
         <section id="tab-rulesets" class="tab-content">
+            <div class="search-bar">
+                <input type="text" id="domains-search" data-i18n-ph="search.placeholder" placeholder="Search domains & rule sets...">
+            </div>
             <div class="section-header">
                 <h2 data-i18n="custom.title">Custom Rules</h2>
                 <div class="section-actions">
                     <button id="btn-add-custom-rule" class="btn btn-primary" data-i18n="custom.add">+ Add</button>
                 </div>
             </div>
-            <p class="section-hint" data-i18n="custom.hint">Add domains or IP ranges that should be routed through VPN.</p>
+            <p class="section-hint" data-i18n="custom.hint">Add domains or IP ranges and choose how to route them: VPN, Direct, or Block.</p>
             <div id="custom-rules-list" class="card-list"></div>
 
             <div class="section-divider"></div>
@@ -85,7 +89,7 @@
                     <button id="btn-add-ruleset" class="btn btn-primary" data-i18n="rulesets.add">+ Add</button>
                 </div>
             </div>
-            <p class="section-hint" data-i18n-html="rulesets.hint">External rule set files that define which traffic gets routed through VPN. Add links to <code>.srs</code> files.</p>
+            <p class="section-hint" data-i18n-html="rulesets.hint">External rule set files. Choose outbound per list: VPN, Direct, or Block. Add links to <code>.srs</code> files.</p>
             <div id="rulesets-list" class="card-list"></div>
         </section>
         <!-- Settings -->
@@ -106,6 +110,38 @@
                         <button id="btn-save-urltest" class="btn btn-primary btn-sm" data-i18n="modal.save">Save</button>
                     </div>
                 </div>
+            </div>
+        </section>
+        <!-- Connections -->
+        <section id="tab-connections" class="tab-content">
+            <div class="section-header">
+                <h2 data-i18n="conn.title">Connections</h2>
+            </div>
+            <p class="section-hint" data-i18n="conn.hint">Live connections through sing-box. Shows destination, routing outbound, and traffic.</p>
+            <div class="conn-toolbar">
+                <select id="conn-device-filter" class="conn-select"></select>
+                <select id="conn-count" class="conn-select">
+                    <option value="20">20</option>
+                    <option value="30">30</option>
+                    <option value="40">40</option>
+                    <option value="50">50</option>
+                </select>
+                <button id="conn-pause" class="btn btn-secondary btn-small" data-i18n="conn.pause">Pause</button>
+            </div>
+            <div class="conn-table-wrap">
+                <table class="conn-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="conn.colTime">Time</th>
+                            <th data-i18n="conn.colProto">Proto</th>
+                            <th data-i18n="conn.colSource">Source</th>
+                            <th data-i18n="conn.colDest">Destination</th>
+                            <th data-i18n="conn.colOutbound">Outbound</th>
+                            <th>↓/↑</th>
+                        </tr>
+                    </thead>
+                    <tbody id="conn-tbody"></tbody>
+                </table>
             </div>
         </section>
     </main>

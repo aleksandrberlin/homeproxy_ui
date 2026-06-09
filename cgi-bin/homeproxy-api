@@ -7,11 +7,12 @@ CONFIG="homeproxy"
 SUB="subscription"
 SCRIPTS_DIR="/etc/homeproxy/scripts"
 CONFIG_FILE="/etc/config/homeproxy"
-CUSTOM_RULES_LIST="/etc/homeproxy/resources/custom_rules.list"
-CUSTOM_RULES_JSON="/etc/homeproxy/resources/custom_rules.json"
 URLTEST_URL_DEFAULT="https://cp.cloudflare.com"
+UI_PREFS="/etc/homeproxy/ui_prefs"
 POOL_RN="hp_pool"
 POOL_RR="hp_pool_rule"
+POOL_DIRECT="hp_pool_direct"
+POOL_BLOCK="hp_pool_block"
 
 # ── JSON helpers ──────────────────────────────────────────────
 
@@ -99,8 +100,20 @@ is_node_disabled() {
 }
 
 rebuild_pool() {
+    local save_bd=$(uci -q get "$CONFIG.$POOL_BLOCK.domain_suffix" 2>/dev/null)
+    local save_bc=$(uci -q get "$CONFIG.$POOL_BLOCK.ip_cidr" 2>/dev/null)
+    local save_dd=$(uci -q get "$CONFIG.$POOL_DIRECT.domain_suffix" 2>/dev/null)
+    local save_dc=$(uci -q get "$CONFIG.$POOL_DIRECT.ip_cidr" 2>/dev/null)
+    local save_pd=$(uci -q get "$CONFIG.$POOL_RR.domain_suffix" 2>/dev/null)
+    local save_pc=$(uci -q get "$CONFIG.$POOL_RR.ip_cidr" 2>/dev/null)
+
     uci -q delete "$CONFIG.$POOL_RN" 2>/dev/null
     uci -q delete "$CONFIG.$POOL_RR" 2>/dev/null
+    uci -q delete "$CONFIG.$POOL_DIRECT" 2>/dev/null
+    uci -q delete "$CONFIG.$POOL_BLOCK" 2>/dev/null
+    uci -q delete "$CONFIG.custom_rules" 2>/dev/null
+    uci -q delete "$CONFIG.custom_rules_direct" 2>/dev/null
+    uci -q delete "$CONFIG.custom_rules_block" 2>/dev/null
 
     local nodes=""
     for section in $(sections_of_type node); do
@@ -112,31 +125,86 @@ rebuild_pool() {
         fi
         nodes="$nodes $section"
     done
-
     nodes=$(echo "$nodes" | xargs)
-    [ -z "$nodes" ] && return
 
-    uci -q set "$CONFIG.$POOL_RN=routing_node"
-    uci -q set "$CONFIG.$POOL_RN.label=VPN Pool"
-    uci -q set "$CONFIG.$POOL_RN.enabled=1"
-    uci -q set "$CONFIG.$POOL_RN.node=urltest"
-    local urltest_url=$(uci -q get "$CONFIG.config.urltest_url" 2>/dev/null)
-    uci -q set "$CONFIG.$POOL_RN.urltest_url=${urltest_url:-$URLTEST_URL_DEFAULT}"
-    for n in $nodes; do
-        uci -q add_list "$CONFIG.$POOL_RN.urltest_nodes=$n"
-    done
+    if [ -n "$nodes" ]; then
+        uci -q set "$CONFIG.$POOL_RN=routing_node"
+        uci -q set "$CONFIG.$POOL_RN.label=VPN Pool"
+        uci -q set "$CONFIG.$POOL_RN.enabled=1"
+        uci -q set "$CONFIG.$POOL_RN.node=urltest"
+        local urltest_url=$(uci -q get "$CONFIG.config.urltest_url" 2>/dev/null)
+        uci -q set "$CONFIG.$POOL_RN.urltest_url=${urltest_url:-$URLTEST_URL_DEFAULT}"
+        for n in $nodes; do
+            uci -q add_list "$CONFIG.$POOL_RN.urltest_nodes=$n"
+        done
+    fi
 
-    uci -q set "$CONFIG.$POOL_RR=routing_rule"
-    uci -q set "$CONFIG.$POOL_RR.label=VPN Pool Route"
-    uci -q set "$CONFIG.$POOL_RR.enabled=1"
-    uci -q set "$CONFIG.$POOL_RR.action=route"
-    uci -q set "$CONFIG.$POOL_RR.outbound=$POOL_RN"
-
+    local proxy_rs="" direct_rs="" block_rs=""
     for rs in $(sections_of_type ruleset); do
+        local stale_ob=$(uci -q get "$CONFIG.$rs.outbound" 2>/dev/null)
+        case "$stale_ob" in proxy|direct|block) uci -q delete "$CONFIG.$rs.outbound" 2>/dev/null ;; esac
         local rs_enabled=$(uci -q get "$CONFIG.$rs.enabled" 2>/dev/null)
         [ "$rs_enabled" = "0" ] && continue
-        uci -q add_list "$CONFIG.$POOL_RR.rule_set=$rs"
+        local rt=$(uci -q get "$CONFIG.$rs.hp_route" 2>/dev/null)
+        case "$rt" in
+            direct) direct_rs="$direct_rs $rs" ;;
+            block)  block_rs="$block_rs $rs" ;;
+            *)      proxy_rs="$proxy_rs $rs" ;;
+        esac
     done
+
+    block_rs=$(echo "$block_rs" | xargs)
+    if [ -n "$block_rs" ] || [ -n "$save_bd" ] || [ -n "$save_bc" ]; then
+        uci -q set "$CONFIG.$POOL_BLOCK=routing_rule"
+        uci -q set "$CONFIG.$POOL_BLOCK.label=Block Route"
+        uci -q set "$CONFIG.$POOL_BLOCK.enabled=1"
+        uci -q set "$CONFIG.$POOL_BLOCK.action=reject"
+        for rs in $block_rs; do
+            uci -q add_list "$CONFIG.$POOL_BLOCK.rule_set=$rs"
+        done
+        for d in $save_bd; do
+            uci -q add_list "$CONFIG.$POOL_BLOCK.domain_suffix=$d"
+        done
+        for c in $save_bc; do
+            uci -q add_list "$CONFIG.$POOL_BLOCK.ip_cidr=$c"
+        done
+    fi
+
+    direct_rs=$(echo "$direct_rs" | xargs)
+    if [ -n "$direct_rs" ] || [ -n "$save_dd" ] || [ -n "$save_dc" ]; then
+        uci -q set "$CONFIG.$POOL_DIRECT=routing_rule"
+        uci -q set "$CONFIG.$POOL_DIRECT.label=Direct Route"
+        uci -q set "$CONFIG.$POOL_DIRECT.enabled=1"
+        uci -q set "$CONFIG.$POOL_DIRECT.action=route"
+        uci -q set "$CONFIG.$POOL_DIRECT.outbound=direct-out"
+        for rs in $direct_rs; do
+            uci -q add_list "$CONFIG.$POOL_DIRECT.rule_set=$rs"
+        done
+        for d in $save_dd; do
+            uci -q add_list "$CONFIG.$POOL_DIRECT.domain_suffix=$d"
+        done
+        for c in $save_dc; do
+            uci -q add_list "$CONFIG.$POOL_DIRECT.ip_cidr=$c"
+        done
+    fi
+
+    proxy_rs=$(echo "$proxy_rs" | xargs)
+    if [ -n "$nodes" ] && { [ -n "$proxy_rs" ] || [ -n "$save_pd" ] || [ -n "$save_pc" ]; }; then
+        uci -q set "$CONFIG.$POOL_RR=routing_rule"
+        uci -q set "$CONFIG.$POOL_RR.label=VPN Pool Route"
+        uci -q set "$CONFIG.$POOL_RR.enabled=1"
+        uci -q set "$CONFIG.$POOL_RR.action=route"
+        uci -q set "$CONFIG.$POOL_RR.outbound=$POOL_RN"
+        for rs in $proxy_rs; do
+            uci -q add_list "$CONFIG.$POOL_RR.rule_set=$rs"
+        done
+        for d in $save_pd; do
+            uci -q add_list "$CONFIG.$POOL_RR.domain_suffix=$d"
+        done
+        for c in $save_pc; do
+            uci -q add_list "$CONFIG.$POOL_RR.ip_cidr=$c"
+        done
+    fi
 }
 
 cleanup_legacy_routing() {
@@ -518,6 +586,8 @@ action_get_rulesets() {
 
     for section in $(sections_of_type ruleset); do
         [ "$section" = "custom_rules" ] && continue
+        [ "$section" = "custom_rules_direct" ] && continue
+        [ "$section" = "custom_rules_block" ] && continue
         [ "$first" = "1" ] || printf ','
         first=0
 
@@ -526,14 +596,16 @@ action_get_rulesets() {
         local rtype=$(uci -q get "$CONFIG.$section.type" 2>/dev/null)
         local fmt=$(uci -q get "$CONFIG.$section.format" 2>/dev/null)
         local url=$(uci -q get "$CONFIG.$section.url" 2>/dev/null)
+        local hp_route=$(uci -q get "$CONFIG.$section.hp_route" 2>/dev/null)
 
-        printf '{"id":%s,"label":%s,"enabled":%s,"type":%s,"format":%s,"url":%s}' \
+        printf '{"id":%s,"label":%s,"enabled":%s,"type":%s,"format":%s,"url":%s,"outbound":%s}' \
             "$(json_str "$section")" \
             "$(json_str "$label")" \
             "$(json_str "${enabled:-1}")" \
             "$(json_str "${rtype:-remote}")" \
             "$(json_str "${fmt:-binary}")" \
-            "$(json_str "$url")"
+            "$(json_str "$url")" \
+            "$(json_str "${hp_route:-proxy}")"
     done
 
     printf ']'
@@ -550,19 +622,46 @@ action_add_ruleset() {
         *) json_err "Invalid URL"; return ;;
     esac
 
-    local section
-    section=$(uci add "$CONFIG" ruleset)
-    uci -q set "$CONFIG.$section.label=$label"
-    uci -q set "$CONFIG.$section.enabled=1"
-    uci -q set "$CONFIG.$section.type=remote"
-    uci -q set "$CONFIG.$section.format=binary"
-    uci -q set "$CONFIG.$section.url=$url"
-    uci -q set "$CONFIG.$section.update_interval=1d"
+    local hp_route=$(get_param outbound)
+    case "$hp_route" in
+        direct|block) ;;
+        *) hp_route="proxy" ;;
+    esac
+
+    local section_id
+    section_id=$(echo -n "$url" | md5sum | cut -d' ' -f1)
+
+    uci -q set "$CONFIG.$section_id=ruleset"
+    uci -q set "$CONFIG.$section_id.label=$label"
+    uci -q set "$CONFIG.$section_id.enabled=1"
+    uci -q set "$CONFIG.$section_id.type=remote"
+    uci -q set "$CONFIG.$section_id.format=binary"
+    uci -q set "$CONFIG.$section_id.url=$url"
+    uci -q set "$CONFIG.$section_id.update_interval=1d"
+    uci -q set "$CONFIG.$section_id.hp_route=$hp_route"
 
     rebuild_pool
     uci commit "$CONFIG"
     restart_hp
-    json_ok "{\"id\":$(json_str "$section")}"
+    json_ok "{\"id\":$(json_str "$section_id")}"
+}
+
+action_set_ruleset_outbound() {
+    local id=$(get_param id)
+    local outbound=$(get_param outbound)
+    [ -z "$id" ] && { json_err "ID is required"; return; }
+    id=$(echo "$id" | tr -cd 'a-zA-Z0-9_')
+
+    case "$outbound" in
+        proxy|direct|block) ;;
+        *) json_err "Invalid outbound"; return ;;
+    esac
+
+    uci -q set "$CONFIG.$id.hp_route=$outbound"
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
 }
 
 action_delete_ruleset() {
@@ -580,73 +679,61 @@ action_delete_ruleset() {
 
 # ── Custom Rules ─────────────────────────────────────────────
 
-rebuild_custom_rules_json() {
-    local domains="" cidrs="" fd=1 fc=1
-
-    if [ -f "$CUSTOM_RULES_LIST" ]; then
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            case "$line" in
-                domain:*)
-                    [ "$fd" = "1" ] || domains="$domains,"
-                    fd=0
-                    domains="$domains$(json_str "${line#domain:}")"
-                    ;;
-                ip_cidr:*)
-                    [ "$fc" = "1" ] || cidrs="$cidrs,"
-                    fc=0
-                    cidrs="$cidrs$(json_str "${line#ip_cidr:}")"
-                    ;;
-            esac
-        done < "$CUSTOM_RULES_LIST"
-    fi
-
-    local rules=""
-    [ -n "$domains" ] && rules="{\"domain_suffix\":[$domains]}"
-    if [ -n "$cidrs" ]; then
-        [ -n "$rules" ] && rules="$rules,"
-        rules="${rules}{\"ip_cidr\":[$cidrs]}"
-    fi
-
-    mkdir -p "$(dirname "$CUSTOM_RULES_JSON")"
-    printf '{"version":2,"rules":[%s]}' "$rules" > "$CUSTOM_RULES_JSON"
-}
-
-ensure_custom_ruleset() {
-    if ! uci -q get "$CONFIG.custom_rules" >/dev/null 2>&1; then
-        uci -q set "$CONFIG.custom_rules=ruleset"
-        uci -q set "$CONFIG.custom_rules.label=Custom Rules"
-        uci -q set "$CONFIG.custom_rules.enabled=1"
-        uci -q set "$CONFIG.custom_rules.type=local"
-        uci -q set "$CONFIG.custom_rules.format=source"
-        uci -q set "$CONFIG.custom_rules.path=$CUSTOM_RULES_JSON"
-        rebuild_pool
-        uci commit "$CONFIG"
-    fi
-}
-
 action_get_custom_rules() {
     local first=1
     printf '['
 
-    if [ -f "$CUSTOM_RULES_LIST" ]; then
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
+    local outbound section d c
+    for outbound in block direct proxy; do
+        case "$outbound" in
+            block)  section="$POOL_BLOCK" ;;
+            direct) section="$POOL_DIRECT" ;;
+            *)      section="$POOL_RR" ;;
+        esac
+        for d in $(uci -q get "$CONFIG.$section.domain_suffix" 2>/dev/null); do
             [ "$first" = "1" ] || printf ','
             first=0
-
-            local rtype="${line%%:*}"
-            local rvalue="${line#*:}"
-            printf '{"type":%s,"value":%s}' "$(json_str "$rtype")" "$(json_str "$rvalue")"
-        done < "$CUSTOM_RULES_LIST"
-    fi
+            printf '{"type":"domain","value":%s,"outbound":%s}' \
+                "$(json_str "$d")" "$(json_str "$outbound")"
+        done
+        for c in $(uci -q get "$CONFIG.$section.ip_cidr" 2>/dev/null); do
+            [ "$first" = "1" ] || printf ','
+            first=0
+            printf '{"type":"ip_cidr","value":%s,"outbound":%s}' \
+                "$(json_str "$c")" "$(json_str "$outbound")"
+        done
+    done
 
     printf ']'
+}
+
+ensure_routing_rule() {
+    local section="$1" outbound="$2"
+    uci -q get "$CONFIG.$section" >/dev/null 2>&1 && return
+    uci -q set "$CONFIG.$section=routing_rule"
+    uci -q set "$CONFIG.$section.enabled=1"
+    case "$outbound" in
+        block)
+            uci -q set "$CONFIG.$section.label=Block Route"
+            uci -q set "$CONFIG.$section.action=reject"
+            ;;
+        direct)
+            uci -q set "$CONFIG.$section.label=Direct Route"
+            uci -q set "$CONFIG.$section.action=route"
+            uci -q set "$CONFIG.$section.outbound=direct-out"
+            ;;
+        *)
+            uci -q set "$CONFIG.$section.label=VPN Pool Route"
+            uci -q set "$CONFIG.$section.action=route"
+            uci -q set "$CONFIG.$section.outbound=$POOL_RN"
+            ;;
+    esac
 }
 
 action_add_custom_rule() {
     local rtype=$(get_param type)
     local rvalue=$(get_param value)
+    local outbound=$(get_param outbound)
 
     [ -z "$rtype" ] || [ -z "$rvalue" ] && { json_err "Type and value are required"; return; }
 
@@ -654,12 +741,26 @@ action_add_custom_rule() {
         domain|ip_cidr) ;;
         *) json_err "Invalid type"; return ;;
     esac
+    case "$outbound" in
+        direct|block) ;;
+        *) outbound="proxy" ;;
+    esac
 
-    mkdir -p "$(dirname "$CUSTOM_RULES_LIST")"
-    echo "${rtype}:${rvalue}" >> "$CUSTOM_RULES_LIST"
+    local section
+    case "$outbound" in
+        block)  section="$POOL_BLOCK" ;;
+        direct) section="$POOL_DIRECT" ;;
+        *)      section="$POOL_RR" ;;
+    esac
 
-    ensure_custom_ruleset
-    rebuild_custom_rules_json
+    ensure_routing_rule "$section" "$outbound"
+
+    case "$rtype" in
+        domain)  uci -q add_list "$CONFIG.$section.domain_suffix=$rvalue" ;;
+        ip_cidr) uci -q add_list "$CONFIG.$section.ip_cidr=$rvalue" ;;
+    esac
+
+    uci commit "$CONFIG"
     restart_hp
     json_ok
 }
@@ -670,14 +771,55 @@ action_delete_custom_rule() {
 
     [ -z "$rtype" ] || [ -z "$rvalue" ] && { json_err "Type and value are required"; return; }
 
-    if [ -f "$CUSTOM_RULES_LIST" ]; then
-        local entry="${rtype}:${rvalue}"
-        local tmp="${CUSTOM_RULES_LIST}.tmp"
-        grep -vxF "$entry" "$CUSTOM_RULES_LIST" > "$tmp" 2>/dev/null
-        mv "$tmp" "$CUSTOM_RULES_LIST"
-    fi
+    local uci_opt
+    case "$rtype" in
+        domain)  uci_opt="domain_suffix" ;;
+        ip_cidr) uci_opt="ip_cidr" ;;
+        *) json_err "Invalid type"; return ;;
+    esac
 
-    rebuild_custom_rules_json
+    uci -q del_list "$CONFIG.$POOL_BLOCK.$uci_opt=$rvalue" 2>/dev/null
+    uci -q del_list "$CONFIG.$POOL_DIRECT.$uci_opt=$rvalue" 2>/dev/null
+    uci -q del_list "$CONFIG.$POOL_RR.$uci_opt=$rvalue" 2>/dev/null
+
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
+action_set_custom_rule_outbound() {
+    local rtype=$(get_param type)
+    local rvalue=$(get_param value)
+    local outbound=$(get_param outbound)
+
+    [ -z "$rtype" ] || [ -z "$rvalue" ] && { json_err "Type and value are required"; return; }
+    case "$outbound" in
+        proxy|direct|block) ;;
+        *) json_err "Invalid outbound"; return ;;
+    esac
+
+    local uci_opt
+    case "$rtype" in
+        domain)  uci_opt="domain_suffix" ;;
+        ip_cidr) uci_opt="ip_cidr" ;;
+        *) json_err "Invalid type"; return ;;
+    esac
+
+    uci -q del_list "$CONFIG.$POOL_BLOCK.$uci_opt=$rvalue" 2>/dev/null
+    uci -q del_list "$CONFIG.$POOL_DIRECT.$uci_opt=$rvalue" 2>/dev/null
+    uci -q del_list "$CONFIG.$POOL_RR.$uci_opt=$rvalue" 2>/dev/null
+
+    local target
+    case "$outbound" in
+        block)  target="$POOL_BLOCK" ;;
+        direct) target="$POOL_DIRECT" ;;
+        *)      target="$POOL_RR" ;;
+    esac
+
+    ensure_routing_rule "$target" "$outbound"
+    uci -q add_list "$CONFIG.$target.$uci_opt=$rvalue"
+
+    uci commit "$CONFIG"
     restart_hp
     json_ok
 }
@@ -768,6 +910,71 @@ action_set_urltest_url() {
     json_ok
 }
 
+# ── DHCP Leases ──────────────────────────────────────────────
+
+action_get_dhcp_leases() {
+    local first=1
+    printf '['
+    if [ -f /tmp/dhcp.leases ]; then
+        while read -r expiry mac ip hostname clientid; do
+            [ -z "$ip" ] && continue
+            [ "$first" = "1" ] || printf ','
+            first=0
+            [ "$hostname" = "*" ] && hostname=""
+            printf '{"ip":%s,"mac":%s,"hostname":%s}' \
+                "$(json_str "$ip")" \
+                "$(json_str "$mac")" \
+                "$(json_str "$hostname")"
+        done < /tmp/dhcp.leases
+    fi
+    printf ']'
+}
+
+# ── Node Names ───────────────────────────────────────────────
+
+action_get_node_names() {
+    local first=1
+    printf '{'
+    for section in $(sections_of_type node); do
+        local label=$(uci -q get "$CONFIG.$section.label" 2>/dev/null)
+        [ -z "$label" ] && continue
+        [ "$first" = "1" ] || printf ','
+        first=0
+        printf '%s:%s' "$(json_str "$section")" "$(json_str "$label")"
+    done
+    printf '}'
+}
+
+# ── UI Preferences ───────────────────────────────────────────
+
+action_get_prefs() {
+    local lang="" theme=""
+    if [ -f "$UI_PREFS" ]; then
+        lang=$(sed -n 's/^lang=//p' "$UI_PREFS")
+        theme=$(sed -n 's/^theme=//p' "$UI_PREFS")
+    fi
+    printf '{"lang":%s,"theme":%s}' \
+        "$(json_str "${lang:-en}")" \
+        "$(json_str "${theme:-system}")"
+}
+
+action_set_pref() {
+    local key=$(get_param key)
+    local val=$(get_param value)
+    [ -z "$key" ] && { json_err "key required"; return; }
+    case "$key" in
+        lang|theme) ;;
+        *) json_err "Invalid key"; return ;;
+    esac
+    mkdir -p "$(dirname "$UI_PREFS")"
+    if [ -f "$UI_PREFS" ] && grep -q "^${key}=" "$UI_PREFS"; then
+        sed -i "s/^${key}=.*/${key}=${val}/" "$UI_PREFS"
+    else
+        echo "${key}=${val}" >> "$UI_PREFS"
+    fi
+    json_ok
+}
+
 # ── Main ──────────────────────────────────────────────────────
 
 echo "Content-Type: application/json"
@@ -792,17 +999,23 @@ case "$ACTION" in
     toggle_node)            action_toggle_node ;;
     get_rulesets)           json_ok "$(action_get_rulesets)" ;;
     add_ruleset)            action_add_ruleset ;;
+    set_ruleset_outbound)   action_set_ruleset_outbound ;;
     delete_ruleset)         action_delete_ruleset ;;
     get_custom_rules)       json_ok "$(action_get_custom_rules)" ;;
     add_custom_rule)        action_add_custom_rule ;;
     delete_custom_rule)     action_delete_custom_rule ;;
+    set_custom_rule_outbound) action_set_custom_rule_outbound ;;
     restart)                action_restart ;;
     get_status)             json_ok "$(action_get_status)" ;;
     get_proxy_status)       json_ok "$(action_get_proxy_status)" ;;
     get_connections)         json_ok "$(action_get_connections)" ;;
     test_delay)             action_test_delay ;;
+    get_dhcp_leases)    json_ok "$(action_get_dhcp_leases)" ;;
+    get_node_names)     json_ok "$(action_get_node_names)" ;;
     get_settings)      json_ok "$(action_get_settings)" ;;
     set_allow_insecure) action_set_allow_insecure ;;
     set_urltest_url)   action_set_urltest_url ;;
+    get_prefs)         json_ok "$(action_get_prefs)" ;;
+    set_pref)          action_set_pref ;;
     *)                      json_err "Unknown action: $ACTION" ;;
 esac
