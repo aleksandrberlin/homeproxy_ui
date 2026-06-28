@@ -405,8 +405,11 @@
         modalBusy = false;
         var okBtn = document.getElementById('modal-ok');
         okBtn.disabled = false;
+        okBtn.style.minWidth = '';
         okBtn.textContent = t('modal.save');
-        document.getElementById('modal-cancel').disabled = false;
+        var cancelBtn = document.getElementById('modal-cancel');
+        cancelBtn.disabled = false;
+        cancelBtn.style.display = '';
 
         m.classList.remove('hidden');
         var first = body.querySelector('input,select');
@@ -424,13 +427,20 @@
         var okBtn = document.getElementById('modal-ok');
         var cancelBtn = document.getElementById('modal-cancel');
         if (busy) {
+            // Show a single button that turns into a loader: keep its width
+            // stable, swap the label for a (white, for contrast on the blue
+            // primary) spinner, disable it, and hide Cancel entirely.
+            okBtn.style.minWidth = okBtn.offsetWidth + 'px';
+            okBtn.style.justifyContent = 'center';
             okBtn.disabled = true;
-            okBtn.innerHTML = '<span class="spinner spinner-dark spinner-sm"></span>';
-            cancelBtn.disabled = true;
+            okBtn.innerHTML = '<span class="spinner spinner-sm"></span>';
+            cancelBtn.style.display = 'none';
         } else {
+            okBtn.style.minWidth = '';
+            okBtn.style.justifyContent = '';
             okBtn.disabled = false;
             okBtn.textContent = t('modal.save');
-            cancelBtn.disabled = false;
+            cancelBtn.style.display = '';
         }
     }
 

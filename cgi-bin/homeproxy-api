@@ -7,7 +7,7 @@ CONFIG="homeproxy"
 SUB="subscription"
 SCRIPTS_DIR="/etc/homeproxy/scripts"
 CONFIG_FILE="/etc/config/homeproxy"
-URLTEST_URL_DEFAULT="https://cp.cloudflare.com"
+URLTEST_URL_DEFAULT="https://www.google.com/generate_204"
 UI_PREFS="/etc/homeproxy/ui_prefs"
 POOL_RN="hp_pool"
 POOL_RR="hp_pool_rule"
@@ -189,7 +189,13 @@ rebuild_pool() {
     fi
 
     proxy_rs=$(echo "$proxy_rs" | xargs)
-    if [ -n "$nodes" ] && { [ -n "$proxy_rs" ] || [ -n "$save_pd" ] || [ -n "$save_pc" ]; }; then
+    # Recreate the proxy rule whenever there is anything to route, even when no
+    # VPN nodes exist. Otherwise the user's custom proxy domains/IPs (stored on
+    # this section) would be silently discarded the moment the last VPN is
+    # disabled. With no nodes the outbound below dangles, which yields an invalid
+    # sing-box config and a stopped service -- acceptable, since there is no VPN
+    # to route to anyway, and the user's rules are preserved for when one returns.
+    if [ -n "$proxy_rs" ] || [ -n "$save_pd" ] || [ -n "$save_pc" ]; then
         uci -q set "$CONFIG.$POOL_RR=routing_rule"
         uci -q set "$CONFIG.$POOL_RR.label=VPN Pool Route"
         uci -q set "$CONFIG.$POOL_RR.enabled=1"
