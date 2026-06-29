@@ -36,6 +36,7 @@
     <nav class="tabs">
         <button class="tab active" data-tab="subscriptions" data-i18n="tab.subscriptions">VPNs</button>
         <button class="tab" data-tab="rulesets" data-i18n="tab.rulesets">Domains</button>
+        <button class="tab" data-tab="devices" data-i18n="tab.devices">Devices</button>
         <button class="tab" data-tab="settings" data-i18n="tab.settings">Settings</button>
         <button class="tab" data-tab="connections" data-i18n="tab.connections">Connections</button>
     </nav>
@@ -93,6 +94,14 @@
             <div id="rulesets-list" class="card-list"></div>
         </section>
         <!-- Settings -->
+        <section id="tab-devices" class="tab-content">
+            <div class="section-header">
+                <h2 data-i18n="devices.title">Devices</h2>
+            </div>
+            <p class="section-hint" data-i18n="devices.hint">Route all traffic from a static DHCP device through the VPN, Direct, or Block. Choose "Default" to apply no special route. Domain rules take precedence — a device's route applies to the rest of its traffic.</p>
+            <div id="devices-list" class="card-list"></div>
+        </section>
+
         <section id="tab-settings" class="tab-content">
             <div class="section-header">
                 <h2 data-i18n="settings.title">Settings</h2>

@@ -13,6 +13,9 @@ POOL_RN="hp_pool"
 POOL_RR="hp_pool_rule"
 POOL_DIRECT="hp_pool_direct"
 POOL_BLOCK="hp_pool_block"
+DEV_VPN="hp_dev_vpn"
+DEV_DIRECT="hp_dev_direct"
+DEV_BLOCK="hp_dev_block"
 
 # ── JSON helpers ──────────────────────────────────────────────
 
@@ -107,10 +110,20 @@ rebuild_pool() {
     local save_pd=$(uci -q get "$CONFIG.$POOL_RR.domain_suffix" 2>/dev/null)
     local save_pc=$(uci -q get "$CONFIG.$POOL_RR.ip_cidr" 2>/dev/null)
 
+    # Device source-IP assignments. These lists ARE the source of truth for the
+    # Devices tab; preserve them across the teardown and recreate the rules
+    # AFTER the pool rules so domain/ruleset matches keep winning.
+    local save_dev_vpn=$(uci -q get "$CONFIG.$DEV_VPN.source_ip_cidr" 2>/dev/null)
+    local save_dev_dir=$(uci -q get "$CONFIG.$DEV_DIRECT.source_ip_cidr" 2>/dev/null)
+    local save_dev_blk=$(uci -q get "$CONFIG.$DEV_BLOCK.source_ip_cidr" 2>/dev/null)
+
     uci -q delete "$CONFIG.$POOL_RN" 2>/dev/null
     uci -q delete "$CONFIG.$POOL_RR" 2>/dev/null
     uci -q delete "$CONFIG.$POOL_DIRECT" 2>/dev/null
     uci -q delete "$CONFIG.$POOL_BLOCK" 2>/dev/null
+    uci -q delete "$CONFIG.$DEV_VPN" 2>/dev/null
+    uci -q delete "$CONFIG.$DEV_DIRECT" 2>/dev/null
+    uci -q delete "$CONFIG.$DEV_BLOCK" 2>/dev/null
     uci -q delete "$CONFIG.custom_rules" 2>/dev/null
     uci -q delete "$CONFIG.custom_rules_direct" 2>/dev/null
     uci -q delete "$CONFIG.custom_rules_block" 2>/dev/null
@@ -209,6 +222,43 @@ rebuild_pool() {
         done
         for c in $save_pc; do
             uci -q add_list "$CONFIG.$POOL_RR.ip_cidr=$c"
+        done
+    fi
+
+    # Per-device rules, emitted AFTER the pool rules. Each carries only
+    # source_ip_cidr so it routes ALL of the device's traffic that wasn't
+    # already matched by a domain rule above. hp_dev_vpn is recreated even with
+    # no VPN nodes (outbound dangles) so device assignments survive, mirroring
+    # the proxy pool rule above.
+    if [ -n "$save_dev_blk" ]; then
+        uci -q set "$CONFIG.$DEV_BLOCK=routing_rule"
+        uci -q set "$CONFIG.$DEV_BLOCK.label=Device Block Route"
+        uci -q set "$CONFIG.$DEV_BLOCK.enabled=1"
+        uci -q set "$CONFIG.$DEV_BLOCK.action=reject"
+        for s in $save_dev_blk; do
+            uci -q add_list "$CONFIG.$DEV_BLOCK.source_ip_cidr=$s"
+        done
+    fi
+
+    if [ -n "$save_dev_dir" ]; then
+        uci -q set "$CONFIG.$DEV_DIRECT=routing_rule"
+        uci -q set "$CONFIG.$DEV_DIRECT.label=Device Direct Route"
+        uci -q set "$CONFIG.$DEV_DIRECT.enabled=1"
+        uci -q set "$CONFIG.$DEV_DIRECT.action=route"
+        uci -q set "$CONFIG.$DEV_DIRECT.outbound=direct-out"
+        for s in $save_dev_dir; do
+            uci -q add_list "$CONFIG.$DEV_DIRECT.source_ip_cidr=$s"
+        done
+    fi
+
+    if [ -n "$save_dev_vpn" ]; then
+        uci -q set "$CONFIG.$DEV_VPN=routing_rule"
+        uci -q set "$CONFIG.$DEV_VPN.label=Device VPN Route"
+        uci -q set "$CONFIG.$DEV_VPN.enabled=1"
+        uci -q set "$CONFIG.$DEV_VPN.action=route"
+        uci -q set "$CONFIG.$DEV_VPN.outbound=$POOL_RN"
+        for s in $save_dev_vpn; do
+            uci -q add_list "$CONFIG.$DEV_VPN.source_ip_cidr=$s"
         done
     fi
 }
@@ -936,6 +986,63 @@ action_get_dhcp_leases() {
     printf ']'
 }
 
+# ── Devices (static DHCP source-IP routing) ──────────────────
+
+action_get_devices() {
+    local vpn_ips=$(uci -q get "$CONFIG.$DEV_VPN.source_ip_cidr" 2>/dev/null)
+    local dir_ips=$(uci -q get "$CONFIG.$DEV_DIRECT.source_ip_cidr" 2>/dev/null)
+    local blk_ips=$(uci -q get "$CONFIG.$DEV_BLOCK.source_ip_cidr" 2>/dev/null)
+    local first=1
+    printf '['
+    for section in $(uci -q show dhcp 2>/dev/null | grep "=host\$" | cut -d. -f2 | cut -d= -f1); do
+        local ip=$(uci -q get "dhcp.$section.ip" 2>/dev/null)
+        [ -z "$ip" ] && continue
+        local name=$(uci -q get "dhcp.$section.name" 2>/dev/null)
+        local mac=$(uci -q get "dhcp.$section.mac" 2>/dev/null)
+        local cidr="$ip/32"
+        local route="default"
+        for x in $blk_ips; do [ "$x" = "$cidr" ] && route="block"; done
+        for x in $dir_ips; do [ "$x" = "$cidr" ] && route="direct"; done
+        for x in $vpn_ips; do [ "$x" = "$cidr" ] && route="vpn"; done
+        [ "$first" = "1" ] || printf ','
+        first=0
+        printf '{"name":%s,"mac":%s,"ip":%s,"route":%s}' \
+            "$(json_str "$name")" "$(json_str "$mac")" \
+            "$(json_str "$ip")" "$(json_str "$route")"
+    done
+    printf ']'
+}
+
+action_set_device_route() {
+    local ip=$(get_param ip)
+    local route=$(get_param route)
+
+    [ -z "$ip" ] && { json_err "IP is required"; return; }
+    case "$route" in
+        default|vpn|direct|block) ;;
+        *) json_err "Invalid route"; return ;;
+    esac
+    echo "$ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || { json_err "Invalid IP"; return; }
+
+    local cidr="$ip/32"
+    uci -q del_list "$CONFIG.$DEV_VPN.source_ip_cidr=$cidr" 2>/dev/null
+    uci -q del_list "$CONFIG.$DEV_DIRECT.source_ip_cidr=$cidr" 2>/dev/null
+    uci -q del_list "$CONFIG.$DEV_BLOCK.source_ip_cidr=$cidr" 2>/dev/null
+
+    case "$route" in
+        vpn)    uci -q set "$CONFIG.$DEV_VPN=routing_rule";    uci -q add_list "$CONFIG.$DEV_VPN.source_ip_cidr=$cidr" ;;
+        direct) uci -q set "$CONFIG.$DEV_DIRECT=routing_rule"; uci -q add_list "$CONFIG.$DEV_DIRECT.source_ip_cidr=$cidr" ;;
+        block)  uci -q set "$CONFIG.$DEV_BLOCK=routing_rule";  uci -q add_list "$CONFIG.$DEV_BLOCK.source_ip_cidr=$cidr" ;;
+    esac
+
+    # rebuild_pool re-emits the hp_dev_* rules after the pool rules and drops any
+    # that became empty, keeping ordering and preservation consistent.
+    rebuild_pool
+    uci commit "$CONFIG"
+    restart_hp
+    json_ok
+}
+
 # ── Node Names ───────────────────────────────────────────────
 
 action_get_node_names() {
@@ -1017,6 +1124,8 @@ case "$ACTION" in
     get_connections)         json_ok "$(action_get_connections)" ;;
     test_delay)             action_test_delay ;;
     get_dhcp_leases)    json_ok "$(action_get_dhcp_leases)" ;;
+    get_devices)        json_ok "$(action_get_devices)" ;;
+    set_device_route)   action_set_device_route ;;
     get_node_names)     json_ok "$(action_get_node_names)" ;;
     get_settings)      json_ok "$(action_get_settings)" ;;
     set_allow_insecure) action_set_allow_insecure ;;

@@ -471,22 +471,50 @@
 
     // ── Tabs ─────────────────────────────────────────────────
 
+    function hashTab() {
+        var name = (location.hash || '').replace(/^#/, '');
+        if (!name || !document.querySelector('.tab[data-tab="' + name + '"]')) {
+            return 'subscriptions';
+        }
+        return name;
+    }
+
+    function activateTab(name) {
+        document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+        document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.remove('active'); });
+        var btn = document.querySelector('.tab[data-tab="' + name + '"]');
+        var content = document.getElementById('tab-' + name);
+        if (btn) btn.classList.add('active');
+        if (content) content.classList.add('active');
+        if (name === 'rulesets') {
+            loadRulesets();
+            loadCustomRules();
+        }
+        if (name === 'devices') {
+            loadDevices();
+        }
+        if (name === 'connections') {
+            startConnPolling();
+        } else {
+            stopConnPolling();
+        }
+    }
+
     document.querySelectorAll('.tab').forEach(function (tab) {
         tab.addEventListener('click', function () {
-            document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
-            document.querySelectorAll('.tab-content').forEach(function (c) { c.classList.remove('active'); });
-            tab.classList.add('active');
-            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-            if (tab.dataset.tab === 'rulesets') {
-                loadRulesets();
-                loadCustomRules();
-            }
-            if (tab.dataset.tab === 'connections') {
-                startConnPolling();
+            // Drive activation through the URL hash so tabs are linkable; the
+            // hashchange handler does the actual switch. Re-activate directly
+            // when the hash is already this tab (clicking the active tab).
+            if (hashTab() === tab.dataset.tab) {
+                activateTab(tab.dataset.tab);
             } else {
-                stopConnPolling();
+                location.hash = tab.dataset.tab;
             }
         });
+    });
+
+    window.addEventListener('hashchange', function () {
+        activateTab(hashTab());
     });
 
     // ── Subscriptions ────────────────────────────────────────
@@ -1224,6 +1252,63 @@
         });
     }
 
+    // ── Devices ──────────────────────────────────────────────
+
+    function deviceRouteOptions(selected) {
+        var r = selected || 'default';
+        return '<option value="default"' + (r === 'default' ? ' selected' : '') + '>' + esc(t('devices.route.default')) + '</option>' +
+            '<option value="vpn"' + (r === 'vpn' ? ' selected' : '') + '>' + esc(t('devices.route.vpn')) + '</option>' +
+            '<option value="direct"' + (r === 'direct' ? ' selected' : '') + '>' + esc(t('devices.route.direct')) + '</option>' +
+            '<option value="block"' + (r === 'block' ? ' selected' : '') + '>' + esc(t('devices.route.block')) + '</option>';
+    }
+
+    function loadDevices() {
+        api('get_devices').then(function (res) {
+            if (!res.ok) { toast(res.error, false); return; }
+            renderDevices(res.data || []);
+        }).catch(function () { toast(t('msg.connFailed'), false); });
+    }
+
+    function renderDevices(devices) {
+        var list = document.getElementById('devices-list');
+        if (!devices.length) {
+            list.innerHTML = '<div class="empty">' + esc(t('devices.empty')) + '</div>';
+            return;
+        }
+        list.innerHTML = '';
+        devices.forEach(function (dev) {
+            var card = document.createElement('div');
+            card.className = 'card';
+            var title = dev.name || dev.ip;
+            var meta = dev.ip + (dev.mac ? ' · ' + dev.mac : '');
+            card.innerHTML =
+                '<div class="card-row">' +
+                    '<div class="card-info">' +
+                        '<div class="card-title">' + esc(title) + '</div>' +
+                        '<div class="card-meta">' + esc(meta) + '</div>' +
+                    '</div>' +
+                    '<div class="card-actions">' +
+                        '<select class="outbound-select" data-device-route title="' + esc(t('devices.defaultHint')) + '">' + deviceRouteOptions(dev.route) + '</select>' +
+                    '</div>' +
+                '</div>';
+            card.querySelector('[data-device-route]').addEventListener('change', function () {
+                var sel = this;
+                var prev = dev.route || 'default';
+                sel.disabled = true;
+                api('set_device_route', { ip: dev.ip, route: sel.value }).then(function (res) {
+                    sel.disabled = false;
+                    if (res.ok) { dev.route = sel.value; toast(t('msg.deviceRouteChanged'), true); }
+                    else { sel.value = prev; toast(res.error, false); }
+                }).catch(function () {
+                    sel.disabled = false;
+                    sel.value = prev;
+                    toast(t('msg.connFailed'), false);
+                });
+            });
+            list.appendChild(card);
+        });
+    }
+
     document.getElementById('btn-add-ruleset').addEventListener('click', function () {
         modal(t('modal.addRuleset'), [
             { name: 'label', label: t('field.rulesetName'), placeholder: t('ph.rulesetName'), required: true },
@@ -1459,6 +1544,7 @@
         applyLang();
     });
     loadAll();
+    activateTab(hashTab());
 
     setInterval(function () {
         api('get_status').then(function (res) {
